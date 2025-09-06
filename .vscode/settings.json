@@ -1,0 +1,7 @@
+{
+    "files.associations": {
+        "common.h": "c",
+        "semaphore.h": "c",
+        "time.h": "c"
+    }
+}
