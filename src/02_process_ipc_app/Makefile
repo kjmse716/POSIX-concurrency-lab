@@ -2,36 +2,33 @@
 CC = gcc
 CFLAGS = -Wall -Wextra
 DEBUG_FLAGS = -g -DDEBUG
-# Linker flags:
-# -lrt: Link with the real-time library (for shm_open, sem_open)
-# -pthread: Link with the POSIX threads library (for semaphores)
-LDFLAGS = -lrt -pthread
-TARGETS = producer consumer
-DEBUG_TARGETS = producer_debug consumer_debug
+LDFLAGS = -pthread -lrt # -pthread: Link with the POSIX threads library.
 RM = rm -f
 
+# Find all .c files in current directory.
+SRCS = $(wildcard *.c)
+TARGETS = $(patsubst %.c, %, $(SRCS)) # remove .c suffix
+DEBUG_TARGETS = $(addsuffix _debug, $(TARGETS))
 
 
-# --- Rules ---
+# --- Main Rules ---
 all: $(TARGETS)
 debug: $(DEBUG_TARGETS)
 
-producer: producer.c
+# --- Pattern Rules ---
+%:%.c
+	@echo "Compiling $< to $@"
 	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
-consumer: consumer.c
-	$(CC) $(CFLAGS) -o $@ $< $(LDFLAGS)
+
+%_debug: %.c
+	@echo "Compiling $< to $@(Debug Mode)"
+	$(CC) $(CFLAGS) $(DEBUG_FLAGS) -o $@ $< $(LDFLAGS)
+
 clean:
 	$(RM) $(TARGETS) $(DEBUG_TARGETS)
 
-# ---Rules for debug (showcase) mode.
-producer_debug: producer.c
-	$(CC) $(CFLAGS) $(DEBUG_FLAGS) -o $@ $< $(LDFLAGS) 
-consumer_debug: consumer.c
-	$(CC) $(CFLAGS) $(DEBUG_FLAGS) -o $@ $< $(LDFLAGS) 
-
-
 # Declare that 'all' and 'clean' are not actual files.
-.PHONY: all clean debug
+.PHONY: all debug clean
 
 
 

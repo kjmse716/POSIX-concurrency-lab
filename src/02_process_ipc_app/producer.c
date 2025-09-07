@@ -51,12 +51,6 @@ double get_elapsed_seconds(struct timespec start, struct timespec end) {
 
 int main()
 {
-
-
-
-
-
-
     struct timespec start_time, communication_start_time, communication_end_time;
 
     // startup time measurement start.

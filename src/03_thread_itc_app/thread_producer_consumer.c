@@ -18,7 +18,7 @@
 #define MAX_MESSAGE_LEN 1024
 
 #ifndef NUM_PRODUCTS
-    #define NUM_PRODUCTS 10
+    #define NUM_PRODUCTS 100000
 #endif
 
 

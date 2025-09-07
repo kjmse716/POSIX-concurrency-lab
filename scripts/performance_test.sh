@@ -3,12 +3,12 @@
 NUM_RUNS=5
 
 # Test cases.
-PRODUCT_COUNTS=(1000 10000 100000 1000000)
+PRODUCT_COUNTS=(1000 10000 100000 1000000 10000000 100000000)
 
 OUTPUT_FILE="results_avg.csv"
 
 # Source code files.
-THREAD_SRC="./src/03_thread_itc_app/thread_producer_consumer.c"
+THREAD_SRC="./src/03_thread_itc_app/thread_producer_consumer_sem.c"
 PROCESS_PRODUCER_SRC="./src/02_process_ipc_app/producer.c"
 PROCESS_CONSUMER_SRC="./src/02_process_ipc_app/consumer.c"
 
