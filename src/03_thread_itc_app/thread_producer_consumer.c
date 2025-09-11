@@ -17,7 +17,7 @@
 
 // --- Workload setting ---
 #ifndef NUM_PRODUCTS
-    #define NUM_PRODUCTS 10
+    #define NUM_PRODUCTS 100000
 #endif
 
 // --- Buffer setting --- 
