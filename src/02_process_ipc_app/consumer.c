@@ -23,8 +23,11 @@ void consumer(shared_data *data_ptr){
             perror("sem_wait(&data_ptr->semaphore).");
             break;
         }
+
         // Read and print data from shared memory
-        LOG("Consume:%s\n", data_ptr->message);
+        LOG("Consume:%s\n", data_ptr->message[data_ptr->curr_consumer]);
+        data_ptr->curr_consumer = (data_ptr->curr_consumer + 1) % BUFFER_SIZE;
+
 
         if(sem_post(&data_ptr->semaphore) == -1){
             perror("em_post(&data_ptr->semaphore)");

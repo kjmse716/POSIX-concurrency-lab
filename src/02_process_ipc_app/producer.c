@@ -25,8 +25,8 @@ void producer(shared_data *data_ptr){
             break;
         }
         // write data into shared memory
-        snprintf(data_ptr->message, sizeof(data_ptr->message), "Product:%d", i);
-
+        snprintf(data_ptr->message[data_ptr->curr_producer], sizeof(data_ptr->message[data_ptr->curr_producer]), "Product:%d", i);
+        data_ptr->curr_producer = (data_ptr->curr_producer + 1) % BUFFER_SIZE;
 
         if(sem_post(&data_ptr->semaphore) == -1){
             perror("sem_post(&data_ptr->semaphore)");
@@ -51,11 +51,6 @@ double get_elapsed_seconds(struct timespec start, struct timespec end) {
 
 int main()
 {
-
-
-
-
-
 
     struct timespec start_time, communication_start_time, communication_end_time;
 
@@ -96,20 +91,25 @@ int main()
     close(file_descriptor);
 
 
-    // --- Initialize semaphore ---
+
     shared_data *data_ptr = (shared_data*)buffer;
+
+    // --- Initialize circular buffer index ---
+    data_ptr->curr_producer = 0;
+    data_ptr->curr_consumer = 0;
+
+    // --- Initialize semaphore ---
     if(sem_init(&data_ptr->semaphore, 1, 1) == -1 ||
-       sem_init(&data_ptr->space, 1, 1) == -1 ||
+       sem_init(&data_ptr->space, 1, BUFFER_SIZE) == -1 ||
        sem_init(&data_ptr->product, 1, 0) == -1||
        sem_init(&data_ptr->complete, 1, 0)== -1){
         perror("sem_init failed.");
         return EXIT_FAILURE;
     }
+
     // --- For time measurement ---
     sem_init(&data_ptr->consumer_ready, 1, 0); 
     sem_init(&data_ptr->start_gun_sem, 1, 0); 
-
-
 
     LOG("sem_init() success.\n");
     sem_post(ready);

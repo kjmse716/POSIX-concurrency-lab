@@ -15,11 +15,17 @@
 #endif
 
 
-#define MAX_MESSAGE_LEN 1024
-
+// --- Workload setting ---
 #ifndef NUM_PRODUCTS
     #define NUM_PRODUCTS 10
 #endif
+
+// --- Buffer setting --- 
+#ifndef BUFFER_SIZE
+    #define BUFFER_SIZE 10
+#endif
+#define MAX_MESSAGE_LEN 1024
+
 
 
 typedef struct {
@@ -27,8 +33,10 @@ typedef struct {
     pthread_cond_t  product_cond;
     pthread_cond_t  space_cond;
     
+    // --- Circular buffer ---
     int message_ready;
-    char message[MAX_MESSAGE_LEN];
+    char message[BUFFER_SIZE][MAX_MESSAGE_LEN];
+    int curr_producer, curr_consumer;
 
     /* --- For time measurement --- */
     sem_t ready_sem; 
@@ -58,16 +66,18 @@ void* producer(void* arg) {
         }
 
         // wait for a space.
-        while (data_ptr->message_ready == 1) {
+        while (data_ptr->message_ready >= BUFFER_SIZE) {
             if (pthread_cond_wait(&data_ptr->space_cond, &data_ptr->mutex) != 0) {
                 perror("producer cond_wait space fail.");
             }
         }
         
         // write data into shared memory
-        sprintf(data_ptr->message, "Product:%d", i);
-        data_ptr->message_ready = 1;
-        LOG("Producer created: %s\n", data_ptr->message);
+        sprintf(data_ptr->message[data_ptr->curr_producer], "Product:%d", i);
+        LOG("Producer created: %s\n", data_ptr->message[data_ptr->curr_producer]);
+        data_ptr->curr_producer = (data_ptr->curr_producer + 1) % BUFFER_SIZE;
+        data_ptr->message_ready += 1;
+        
         
         // signal that a product is ready
         if (pthread_cond_signal(&data_ptr->product_cond) != 0) {
@@ -98,15 +108,16 @@ void* consumer(void* arg) {
         }
         
         // wait for a product 
-        while (data_ptr->message_ready == 0) {
+        while (data_ptr->message_ready < 1) {
             if (pthread_cond_wait(&data_ptr->product_cond, &data_ptr->mutex) != 0) {
                 perror("pthread_cond_wait(product_cond)");
             }
         }
 
         // read data from shared memory
-        LOG("Consumer got:   %s\n", data_ptr->message);
-        data_ptr->message_ready = 0;
+        LOG("Consumer got:   %s\n", data_ptr->message[data_ptr->curr_consumer]);
+        data_ptr->curr_consumer = (data_ptr->curr_consumer + 1) % BUFFER_SIZE;
+        data_ptr->message_ready -= 1;
 
         // signal that a space is available
         if (pthread_cond_signal(&data_ptr->space_cond) != 0) {
@@ -127,6 +138,9 @@ void* consumer(void* arg) {
 int main() {
     pthread_t producer_thread, consumer_thread;
     shared_data data;
+
+    data.curr_producer = 0;
+    data.curr_consumer = 0;
 
     sem_init(&data.ready_sem, 0, 0); // pshared mode 0:shared between threads, initial value 0.
     sem_init(&data.start_gun_sem, 0, 0); 
@@ -194,7 +208,7 @@ int main() {
     pthread_mutex_destroy(&data.mutex);
     pthread_cond_destroy(&data.product_cond);
     pthread_cond_destroy(&data.space_cond);
-    LOG("pthread mutex and condvars destroyed successfully.\n");
+    LOG("pthread mutex and cond destroyed successfully.\n");
 
 
     // --- Show measurement result --
