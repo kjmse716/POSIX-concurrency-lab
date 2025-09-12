@@ -2,11 +2,11 @@
 
 # --- Configuration ---
 # Number of runs for each test case. average the results for accuracy.
-NUM_RUNS=5
+NUM_RUNS=200
 
 # Test cases.
-PRODUCT_COUNTS=(1000 10000 100000 1000000)
-BUFFER_SIZES=(1 10 100 1000) # Added buffer size test cases
+PRODUCT_COUNTS=(100 1000 10000 100000 100000)
+BUFFER_SIZES=(1 4 7 20 50)
 
 OUTPUT_FILE="results.csv"
 
