@@ -3,7 +3,6 @@
 # --- Configuration ---
 # Number of runs for each test case. average the results for accuracy.
 NUM_RUNS=200
-NUM_RUNS=200
 
 # Test cases.
 PRODUCT_COUNTS=(100	500	1000 1500 2000 2500 3000)
