@@ -9,7 +9,9 @@
 #include <semaphore.h>
 #include "common.h"
 #include <time.h> // Measure time
+#include <string.h> // for memcpy
 
+static char template_message[MAX_MESSAGE_LEN];
 
 void producer(shared_data *data_ptr){
 
@@ -24,8 +26,14 @@ void producer(shared_data *data_ptr){
             perror("sem_wait(&data_ptr->semaphore).");
             break;
         }
+        
         // write data into shared memory
-        snprintf(data_ptr->message[data_ptr->curr_producer], sizeof(data_ptr->message[data_ptr->curr_producer]), "Product:%d", i);
+        #ifdef DEBUG
+            snprintf(data_ptr->message[data_ptr->curr_producer], sizeof(data_ptr->message[data_ptr->curr_producer]), "Product:%d", i);
+        #else
+            memcpy(data_ptr->message[data_ptr->curr_producer], template_message, MAX_MESSAGE_LEN);
+        #endif
+
         data_ptr->curr_producer = (data_ptr->curr_producer + 1) % BUFFER_SIZE;
 
         if(sem_post(&data_ptr->semaphore) == -1){
@@ -51,10 +59,9 @@ double get_elapsed_seconds(struct timespec start, struct timespec end) {
 
 int main()
 {
-    struct timespec start_time, communication_start_time, communication_end_time;
-
-    // startup time measurement start.
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
+    // create the template message for each product
+    memset(template_message, 'A', MAX_MESSAGE_LEN);
+    template_message[MAX_MESSAGE_LEN - 1] = '\0';
 
     // named semaphore for initialization check.
     sem_t* ready = sem_open(READY_SEMAPHORE, O_CREAT, 0600, 0);
@@ -62,6 +69,12 @@ int main()
         perror("sem_open() failed.");
         return EXIT_FAILURE;
     }
+
+    struct timespec start_time, communication_start_time, communication_end_time;
+
+    // startup time measurement start.
+    clock_gettime(CLOCK_MONOTONIC, &start_time);
+
 
     int file_descriptor = shm_open(SHARE_MEMORY_NAME, O_RDWR|O_CREAT, 0600);
 

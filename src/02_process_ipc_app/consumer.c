@@ -9,6 +9,7 @@
 #include <errno.h>
 #include "common.h"
 
+static volatile uint64_t final_checksum;
 
 void consumer(shared_data *data_ptr){
 
@@ -26,6 +27,14 @@ void consumer(shared_data *data_ptr){
 
         // Read and print data from shared memory
         LOG("Consume:%s\n", data_ptr->message[data_ptr->curr_consumer]);
+
+        uint64_t total_checksum = 0;
+        for (int j = 0; j < MAX_MESSAGE_LEN; j++) {
+            total_checksum += data_ptr->message[data_ptr->curr_consumer][j];
+        }
+        final_checksum = total_checksum;
+
+
         data_ptr->curr_consumer = (data_ptr->curr_consumer + 1) % BUFFER_SIZE;
 
 

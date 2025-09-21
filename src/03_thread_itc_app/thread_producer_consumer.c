@@ -6,6 +6,7 @@
 #include <pthread.h>
 #include <semaphore.h> // for time measurement (wait until threads are ready).
 #include <time.h> 
+#include <stdint.h>
 
 
 #ifdef DEBUG
@@ -24,9 +25,12 @@
 #ifndef BUFFER_SIZE
     #define BUFFER_SIZE 10
 #endif
-#define MAX_MESSAGE_LEN 1024
 
-
+#ifndef MAX_MESSAGE_LEN
+    #define MAX_MESSAGE_LEN 1024
+#endif
+static volatile uint64_t final_checksum;
+static char template_message[MAX_MESSAGE_LEN];
 
 typedef struct {
     pthread_mutex_t mutex;
@@ -73,7 +77,11 @@ void* producer(void* arg) {
         }
         
         // write data into shared memory
-        sprintf(data_ptr->message[data_ptr->curr_producer], "Product:%d", i);
+        #ifdef DEBUG
+            sprintf(data_ptr->message[data_ptr->curr_producer], "Product:%d", i);
+        #else
+            memcpy(data_ptr->message[data_ptr->curr_producer],template_message, MAX_MESSAGE_LEN);
+        #endif
         LOG("Producer created: %s\n", data_ptr->message[data_ptr->curr_producer]);
         data_ptr->curr_producer = (data_ptr->curr_producer + 1) % BUFFER_SIZE;
         data_ptr->message_ready += 1;
@@ -116,6 +124,13 @@ void* consumer(void* arg) {
 
         // read data from shared memory
         LOG("Consumer got:   %s\n", data_ptr->message[data_ptr->curr_consumer]);
+        uint64_t total_checksum = 0;
+        for (int j = 0; j < MAX_MESSAGE_LEN; j++) {
+            total_checksum += data_ptr->message[data_ptr->curr_consumer][j];
+        }
+        final_checksum = total_checksum;
+
+
         data_ptr->curr_consumer = (data_ptr->curr_consumer + 1) % BUFFER_SIZE;
         data_ptr->message_ready -= 1;
 
@@ -144,6 +159,12 @@ int main() {
 
     sem_init(&data.ready_sem, 0, 0); // pshared mode 0:shared between threads, initial value 0.
     sem_init(&data.start_gun_sem, 0, 0); 
+
+    // create the template message for each product
+    memset(template_message, 'A', MAX_MESSAGE_LEN);
+    template_message[MAX_MESSAGE_LEN - 1] = '\0';
+
+
 
     // timespec for time measurement.
     struct timespec start_time, communication_start_time, communication_end_time;

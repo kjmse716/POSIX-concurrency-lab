@@ -1,4 +1,6 @@
 #include <semaphore.h>
+#include <stdint.h>
+
 #ifdef DEBUG
     #define LOG(msg, ...) printf(msg, ##__VA_ARGS__);
 #else
@@ -17,11 +19,9 @@
 #ifndef BUFFER_SIZE
     #define BUFFER_SIZE 10
 #endif
-#define MAX_MESSAGE_LEN 1024
-
-// get the size of shared_data struct.
-#define SHM_SIZE sizeof(shared_data)
-
+#ifndef MAX_MESSAGE_LEN
+    #define MAX_MESSAGE_LEN 1024
+#endif
 
 
 typedef struct{
@@ -41,4 +41,5 @@ typedef struct{
 
 }shared_data;
 
-
+// get the size of shared_data struct.
+#define SHM_SIZE sizeof(shared_data)
