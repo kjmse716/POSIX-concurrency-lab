@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L // For CLOCK_MONOTONIC
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>     // For exit macros
 #include <unistd.h>

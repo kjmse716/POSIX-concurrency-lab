@@ -17,7 +17,7 @@
 
 // --- Buffer setting --- 
 #ifndef BUFFER_SIZE
-    #define BUFFER_SIZE 10
+    #define BUFFER_SIZE 1
 #endif
 #ifndef MAX_MESSAGE_LEN
     #define MAX_MESSAGE_LEN 1024
