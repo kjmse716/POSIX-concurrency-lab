@@ -2,13 +2,13 @@
 
 # --- Configuration ---
 # Number of runs for each test case. average the results for accuracy.
-NUM_RUNS=100
+NUM_RUNS=200
 
 # The time in seconds to pause between each run to allow the system to cool down.
 REST_INTERVAL_S=0.1
 
 # Test cases.
-PRODUCT_COUNTS=(500 1000 5000)
+PRODUCT_COUNTS=(100 500 1000 2000 3000)
 BUFFER_SIZES=({1..100}) # Added buffer size test cases
 MESSAGE_LENS=(8 256 512 1024)    # Added message length test cases
 
