@@ -1,6 +1,10 @@
 POSIX-concurrency-lab  
 於 Hackmd 上閱讀 https://hackmd.io/@kjmse716/SJGGZvNqge
 
+```
+Usage: git clone --recurse-submodules https://github.com/kjmse716/POSIX-concurrency-lab.git
+```
+
 # 專案介紹
 ## 專案目標：
 * 透過 POSIX 實作：
