@@ -18,6 +18,8 @@
 #   # After installation, verify:
 #   strace -V
 #   perf --version
+#   
+#   if perf fail, try: sudo ln -sf /usr/lib/linux-tools/6.8.0-86-generic/perf /usr/bin/perf
 # ==============================================================================
 
 
