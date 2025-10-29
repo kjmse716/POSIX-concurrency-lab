@@ -24,15 +24,15 @@
 
 
 # --- Configuration ---
-export FLAMEGRAPH_DIR="/home/kjmse716/Documents/LABs/POSIX-concurrency-lab/library/FlameGraph"
+export FLAMEGRAPH_DIR="/home/kjmse716/Documents/Labs/POSIX-concurrency-lab/library/FlameGraph"
 
-NUM_RUNS=1
+NUM_RUNS=50
 REST_INTERVAL_S=0.1
-PRODUCT_COUNTS=(100000)
-BUFFER_SIZES=(10)
-MESSAGE_LENS=(256)
+PRODUCT_COUNTS=(10000 100000 1000000)
+BUFFER_SIZES=({1..100})
+MESSAGE_LENS=(64 1500 4096 64000)
 
-PROFILING_MIN_PRODUCT_COUNT=10000
+PROFILING_MIN_PRODUCT_COUNT=1000
 
 # Source code paths
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
