@@ -19,8 +19,37 @@
 #   strace -V
 #   perf --version
 #   
-#   if perf fail, try: sudo ln -sf /usr/lib/linux-tools/6.8.0-86-generic/perf /usr/bin/perf
+#   if perf fail, try: sudo ln -sf /usr/lib/linux-tools/$(uname -r)/perf /usr/bin/perf
+#
+# Additional Setup for perf and debug symbols:
+#   # 允許 perf 讀取核心 symbol 位址
+#   sudo sysctl -w kernel.kptr_restrict=0
+#
+#   # 允許 perf 追蹤所有 CPU 和行程的事件（通常在 profiling 時需要）
+#   sudo sysctl -w kernel.perf_event_paranoid=-1
+#
+#   # 安裝對應你核心版本的 linux-tools
+#   sudo apt-get install linux-tools-$(uname -r)
+#
+#   # 使用 lsb_release -cs 來自動獲取你的 Ubuntu 版本代號 (例如 jammy, focal)
+#   # 並將對應的 ddebs repository 設定檔寫入 /etc/apt/sources.list.d/
+#   codename=$(lsb_release -cs)
+#   sudo tee /etc/apt/sources.list.d/ddebs.list << EOF
+#   deb http://ddebs.ubuntu.com/ ${codename} main restricted universe multiverse
+#   deb http://ddebs.ubuntu.com/ ${codename}-updates main restricted universe multiverse
+#   deb http://ddebs.ubuntu.com/ ${codename}-proposed main restricted universe multiverse
+#   EOF
+#
+#   # 下載金鑰並加入到 apt 的信任清單中
+#   sudo apt-get install wget -y
+#   wget -O - http://ddebs.ubuntu.com/dbgsym-release-key.asc | sudo apt-key add -
+#
+#   sudo apt-get update
+#
+#   # 安裝對應核心版本的 debug symbol
+#   sudo apt-get install linux-image-$(uname -r)-dbgsym
 # ==============================================================================
+
 
 
 # --- Configuration ---
@@ -107,7 +136,10 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             PERF_REPORT_FILE="${OUTPUT_PREFIX}_perf_report.txt"
             PERF_REPORT_FLAT_FILE="${OUTPUT_PREFIX}_perf_report_flat.txt"
 
-            echo "       - 編譯 ITC 原始碼 (for timing)..."
+            ### 修改點 1 ###
+            # 確保編譯時總是包含 -g 選項，並且不加入任何優化選項如 -O2 或 -O3，以避免 Frame Pointer 被省略。
+            # 你的原始腳本已經做得很好了，這裡只是再次確認。
+            echo "       - 編譯 ITC 原始碼 (帶有除錯資訊)..."
             gcc "$THREAD_SRC" -o "$THREAD_EXE" -g -DNUM_PRODUCTS="$pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
             if [ $? -ne 0 ]; then echo "       !! ITC 編譯失敗。"; continue; fi
 
@@ -128,7 +160,11 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             fi
 
             echo "       - 執行 perf record..."
-            perf record -F 99 -g -o "$PERF_DATA_FILE" -- "$THREAD_EXE" > /dev/null 2>&1
+            ### 修改點 2 ###
+            # 將 perf record 的 -g 選項 (使用 frame pointer) 改為 --call-graph dwarf。
+            # DWARF 方法會利用編譯到執行檔中的除錯資訊來回溯 call stack，
+            # 即使在 Frame Pointer 被優化掉的情況下也能提供更精準的結果。
+            perf record -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- "$THREAD_EXE" > /dev/null 2>&1
 
             if [ -s "$PERF_DATA_FILE" ]; then
                 echo "       - 生成 perf report 文字報告 (標準 & 平坦)..."
@@ -152,7 +188,10 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             PERF_REPORT_FILE="${OUTPUT_PREFIX}_perf_report.txt"
             PERF_REPORT_FLAT_FILE="${OUTPUT_PREFIX}_perf_report_flat.txt"
 
-            echo "       - 編譯 IPC 原始碼 (使用 Makefile)..."
+            ### 修改點 3 ###
+            # 同樣地，確認 Makefile 會傳遞 -g 給編譯器。
+            # 你的 Makefile 透過 CFLAGS 傳遞 -g，這是正確的做法。
+            echo "       - 編譯 IPC 原始碼 (帶有除錯資訊)..."
             (cd "${PROJECT_ROOT_DIR}/src/02_process_ipc_app" && \
              make CFLAGS+="-g -DNUM_PRODUCTS=$pcount -DBUFFER_SIZE=$bsize -DMAX_MESSAGE_LEN=$mlen")
             if [ ! -f "$PROCESS_PRODUCER_EXE" ] || [ ! -f "$PROCESS_CONSUMER_EXE" ]; then
@@ -177,7 +216,9 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             fi
 
             echo "       - 執行 perf record..."
-            perf record -F 99 -g -o "$PERF_DATA_FILE" -- "$IPC_RUN_SCRIPT" > /dev/null 2>&1
+            ### 修改點 4 ###
+            # 同樣地，將 IPC 測試的 perf record 也改為使用 --call-graph dwarf。
+            perf record -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- "$IPC_RUN_SCRIPT" > /dev/null 2>&1
             
             if [ -s "$PERF_DATA_FILE" ]; then
                 echo "       - 生成 perf report 文字報告 (標準 & 平坦)..."
