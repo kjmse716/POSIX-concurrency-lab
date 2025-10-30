@@ -147,7 +147,7 @@ for bsize in "${BUFFER_SIZES[@]}"; do
 
             echo "       - 執行 strace 和 perf stat..."
             strace -T -c -f -e "$STRACE_ITC_EVENTS" "$THREAD_EXE" > "${OUTPUT_PREFIX}_strace_summary.txt" 2>&1
-            perf stat -e "$PERF_EVENTS" "$THREAD_EXE" > "${OUTPUT_PREFIX}_perf_stat.txt" 2>&1
+            perf stat -d -e "$PERF_EVENTS" "$THREAD_EXE" > "${OUTPUT_PREFIX}_perf_stat.txt" 2>&1
 
             perf_pcount=$pcount
             if (( pcount < PROFILING_MIN_PRODUCT_COUNT )); then
@@ -200,7 +200,7 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             
             echo "       - 執行 strace 和 perf stat..."
             strace -T -c -f -e "$STRACE_IPC_EVENTS" "$IPC_RUN_SCRIPT" > "${OUTPUT_PREFIX}_strace_summary.txt" 2>&1
-            perf stat -e "$PERF_EVENTS" "$IPC_RUN_SCRIPT" > "${OUTPUT_PREFIX}_perf_stat.txt" 2>&1
+            perf stat -d -e "$PERF_EVENTS" "$IPC_RUN_SCRIPT" > "${OUTPUT_PREFIX}_perf_stat.txt" 2>&1
 
             perf_pcount=$pcount
             if (( pcount < PROFILING_MIN_PRODUCT_COUNT )); then
