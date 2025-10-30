@@ -136,9 +136,6 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             PERF_REPORT_FILE="${OUTPUT_PREFIX}_perf_report.txt"
             PERF_REPORT_FLAT_FILE="${OUTPUT_PREFIX}_perf_report_flat.txt"
 
-            ### 修改點 1 ###
-            # 確保編譯時總是包含 -g 選項，並且不加入任何優化選項如 -O2 或 -O3，以避免 Frame Pointer 被省略。
-            # 你的原始腳本已經做得很好了，這裡只是再次確認。
             echo "       - 編譯 ITC 原始碼 (帶有除錯資訊)..."
             gcc "$THREAD_SRC" -o "$THREAD_EXE" -g -DNUM_PRODUCTS="$pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
             if [ $? -ne 0 ]; then echo "       !! ITC 編譯失敗。"; continue; fi
@@ -160,10 +157,6 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             fi
 
             echo "       - 執行 perf record..."
-            ### 修改點 2 ###
-            # 將 perf record 的 -g 選項 (使用 frame pointer) 改為 --call-graph dwarf。
-            # DWARF 方法會利用編譯到執行檔中的除錯資訊來回溯 call stack，
-            # 即使在 Frame Pointer 被優化掉的情況下也能提供更精準的結果。
             perf record -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- "$THREAD_EXE" > /dev/null 2>&1
 
             if [ -s "$PERF_DATA_FILE" ]; then
@@ -188,12 +181,14 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             PERF_REPORT_FILE="${OUTPUT_PREFIX}_perf_report.txt"
             PERF_REPORT_FLAT_FILE="${OUTPUT_PREFIX}_perf_report_flat.txt"
 
-            ### 修改點 3 ###
-            # 同樣地，確認 Makefile 會傳遞 -g 給編譯器。
-            # 你的 Makefile 透過 CFLAGS 傳遞 -g，這是正確的做法。
-            echo "       - 編譯 IPC 原始碼 (帶有除錯資訊)..."
+            echo "       - 清理並編譯 IPC 原始碼 (帶有除錯資訊)..."
+            # --- FIX STARTS HERE ---
+            # 關鍵修正：在編譯前先執行 'make clean'，強制重新生成執行檔
             (cd "${PROJECT_ROOT_DIR}/src/02_process_ipc_app" && \
+             make clean && \
              make CFLAGS+="-g -DNUM_PRODUCTS=$pcount -DBUFFER_SIZE=$bsize -DMAX_MESSAGE_LEN=$mlen")
+            # --- FIX ENDS HERE ---
+            
             if [ ! -f "$PROCESS_PRODUCER_EXE" ] || [ ! -f "$PROCESS_CONSUMER_EXE" ]; then
                 echo "       !! IPC 編譯失敗。"; continue;
             fi
@@ -211,13 +206,15 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             if (( pcount < PROFILING_MIN_PRODUCT_COUNT )); then
                 perf_pcount=$PROFILING_MIN_PRODUCT_COUNT
                 echo "       - 為了 profiling，使用更大的工作負載 (${perf_pcount}) 重新編譯..."
+                # --- FIX STARTS HERE ---
+                # 同樣地，profiling 的部分也要先 clean
                 (cd "${PROJECT_ROOT_DIR}/src/02_process_ipc_app" && \
+                 make clean && \
                  make CFLAGS+="-g -DNUM_PRODUCTS=$perf_pcount -DBUFFER_SIZE=$bsize -DMAX_MESSAGE_LEN=$mlen")
+                # --- FIX ENDS HERE ---
             fi
 
             echo "       - 執行 perf record..."
-            ### 修改點 4 ###
-            # 同樣地，將 IPC 測試的 perf record 也改為使用 --call-graph dwarf。
             perf record -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- "$IPC_RUN_SCRIPT" > /dev/null 2>&1
             
             if [ -s "$PERF_DATA_FILE" ]; then
@@ -233,7 +230,6 @@ for bsize in "${BUFFER_SIZES[@]}"; do
                  echo "       !! Perf record 未能採集到足夠數據，跳過報告和火焰圖生成。"
             fi
             
-            ### 修正: 移除此處的 make clean，統一由 trap cleanup 處理 ###
             echo "   ... IPC 測試完成。"
 
         done
