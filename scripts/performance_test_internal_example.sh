@@ -2,22 +2,22 @@
 
 # --- Configuration ---
 # Number of runs for each test case. average the results for accuracy.
-NUM_RUNS=200
+NUM_RUNS=20
 
 # The time in seconds to pause between each run to allow the system to cool down.
 REST_INTERVAL_S=0.1
 
 # Test cases.
-PRODUCT_COUNTS=(100 500 1000 2000 3000)
+PRODUCT_COUNTS=(5000 100000)
 BUFFER_SIZES=({1..100}) # Added buffer size test cases
-MESSAGE_LENS=(8 256 512 1024)    # Added message length test cases
+MESSAGE_LENS=(64 256 1500)    # Added message length test cases
 
 OUTPUT_FILE="results.csv"
 
 # Source code files.
-THREAD_SRC="./src/03_thread_itc_app/thread_producer_consumer.c"
-PROCESS_PRODUCER_SRC="./src/02_process_ipc_app/producer.c"
-PROCESS_CONSUMER_SRC="./src/02_process_ipc_app/consumer.c"
+THREAD_SRC="./src/04_performance_comparison/itc_producer_consumer.c"
+PROCESS_PRODUCER_SRC="./src/04_performance_comparison/ipc_producer.c"
+PROCESS_CONSUMER_SRC="./src/04_performance_comparison/ipc_consumer.c"
 
 # Names for our compiled executables.
 THREAD_EXE="./thread_test"
@@ -46,7 +46,7 @@ for size in "${BUFFER_SIZES[@]}"; do
             echo "    [1/2] Compiling and running the Thread model..."
             
             # Compile the thread program with dynamic NUM_PRODUCTS, BUFFER_SIZE and MAX_MESSAGE_LEN.
-            gcc ${THREAD_SRC} -o ${THREAD_EXE} -DNUM_PRODUCTS=${count} -DBUFFER_SIZE=${size} -DMAX_MESSAGE_LEN=${msg_len} -lpthread
+            gcc ${THREAD_SRC} -o ${THREAD_EXE} -DNUM_PRODUCTS=${count} -DBUFFER_SIZE=${size} -DMAX_MESSAGE_LEN=${msg_len} -lpthread -lrt
             if [ $? -ne 0 ]; then
                 echo "    !! Thread model compilation failed"
                 continue 
