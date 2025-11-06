@@ -16,17 +16,15 @@ static char template_message[MAX_MESSAGE_LEN];
 void producer(shared_data *data_ptr){
 
     for(int i = 0;i<NUM_PRODUCTS;i++){
-        // protect read/write critical region
-        if(pthread_mutex_lock(&data_ptr->mutex) != 0){
-            perror("producer mutex_lock failed.");
+        // look for a space.
+        if(sem_wait(&data_ptr->space) == -1){
+            perror("sem_wait(&data_ptr->space).");
             break;
         }
-
-        // wait for a space.
-        while (data_ptr->message_ready >= BUFFER_SIZE) {
-            if (pthread_cond_wait(&data_ptr->space_cond, &data_ptr->mutex) != 0) {
-                perror("producer cond_wait space fail.");
-            }
+        // protect read/write critical region
+        if(sem_wait(&data_ptr->semaphore) == -1){
+            perror("sem_wait(&data_ptr->semaphore).");
+            break;
         }
         
         // write data into shared memory
@@ -37,17 +35,17 @@ void producer(shared_data *data_ptr){
         #endif
 
         data_ptr->curr_producer = (data_ptr->curr_producer + 1) % BUFFER_SIZE;
-        data_ptr->message_ready += 1;
 
-        if(pthread_cond_signal(&data_ptr->product_cond) != 0){
-            perror("producer cond signal failed.");
+        if(sem_post(&data_ptr->semaphore) == -1){
+            perror("sem_post(&data_ptr->semaphore)");
             break;
         }
-        
-        if(pthread_mutex_unlock(&data_ptr->mutex) != 0){
-            perror("producer mutex_unlock failed.");
+
+        if(sem_post(&data_ptr->product) == -1){
+            perror("sem_post(&data_ptr->product)");
             break;
         }
+    
     }    
 
 
@@ -61,11 +59,11 @@ double get_elapsed_seconds(struct timespec start, struct timespec end) {
 
 int main()
 {
-    // create the template message for each product_cond
+    // create the template message for each product
     memset(template_message, 'A', MAX_MESSAGE_LEN);
     template_message[MAX_MESSAGE_LEN - 1] = '\0';
 
-    // named mutex for initialization check.
+    // named semaphore for initialization check.
     sem_t* ready = sem_open(READY_SEMAPHORE, O_CREAT, 0600, 0);
     if(ready == SEM_FAILED){
         perror("sem_open() failed.");
@@ -111,7 +109,6 @@ int main()
     data_ptr->curr_producer = 0;
     data_ptr->curr_consumer = 0;
 
-    data_ptr->message_ready = 0;  // no product at start.
 
     // --- Init semaphores for time measurement ---
     // pshared mode 1:shared between process, initial value 0.
@@ -122,28 +119,18 @@ int main()
         return EXIT_FAILURE;
     }
 
-    
-    // --- Initialize mutex ---
-    pthread_mutexattr_t mattr;
-    pthread_condattr_t cattr;
 
-    pthread_mutexattr_init(&mattr);
-    pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
-
-    pthread_condattr_init(&cattr);
-    pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
-
-    if (pthread_mutex_init(&data_ptr->mutex, &mattr)!= 0 ||
-        pthread_cond_init(&data_ptr->product_cond, &cattr)!= 0 ||
-        pthread_cond_init(&data_ptr->space_cond, &cattr)!= 0) {
-        perror("init failed!!");
+    // --- Initialize semaphore ---
+    if(sem_init(&data_ptr->semaphore, 1, 1) == -1 ||
+       sem_init(&data_ptr->space, 1, BUFFER_SIZE) == -1 ||
+       sem_init(&data_ptr->product, 1, 0) == -1){
+        perror("sem_init failed.");
         return EXIT_FAILURE;
     }
-    pthread_mutexattr_destroy(&mattr);
-    pthread_condattr_destroy(&cattr);
 
 
-    LOG("mutex, cond init success.\n");
+
+    LOG("sem_init() success.\n");
     sem_post(ready);
     sem_close(ready);
     
@@ -166,19 +153,18 @@ int main()
 
 
     sem_unlink(READY_SEMAPHORE);
-
-    // --- Destroy mutex and condition variables ---
-    if( pthread_mutex_destroy(&data_ptr->mutex) != 0||
-        pthread_cond_destroy(&data_ptr->space_cond) != 0 ||
-        pthread_cond_destroy(&data_ptr->product_cond) != 0){
-        perror("mutex, cond destroy failed.");
+    
+    if(sem_destroy(&data_ptr->semaphore) == -1||
+    sem_destroy(&data_ptr->space) == -1 ||
+    sem_destroy(&data_ptr->product) == -1 ||
+    sem_destroy(&data_ptr->complete) == -1){
+        perror("sem_destroy failed.");
         return EXIT_FAILURE;
     }
     
     // --- Destroy sem use for time measurement ---
     sem_destroy(&data_ptr->consumer_ready); 
-    sem_destroy(&data_ptr->start_gun_sem);
-    sem_destroy(&data_ptr->complete); 
+    sem_destroy(&data_ptr->start_gun_sem); 
 
 
     // unmap shared memory object from virtual memory.

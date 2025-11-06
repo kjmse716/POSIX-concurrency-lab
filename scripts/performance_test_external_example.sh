@@ -36,16 +36,16 @@ MESSAGE_LENS=(64 256 1500 64000)
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 
 # IPC Paths
-IPC_SRC_DIR="${SCRIPT_DIR}/../src/02_process_ipc_app"
-IPC_PRODUCER_SRC="${IPC_SRC_DIR}/producer.c"
-IPC_CONSUMER_SRC="${IPC_SRC_DIR}/consumer.c"
-IPC_PRODUCER_EXE="${IPC_SRC_DIR}/producer"
-IPC_CONSUMER_EXE="${IPC_SRC_DIR}/consumer"
+IPC_SRC_DIR="${SCRIPT_DIR}/../src/04_performance_comparison/ipc_itc"
+IPC_PRODUCER_SRC="${IPC_SRC_DIR}/ipc_producer.c"
+IPC_CONSUMER_SRC="${IPC_SRC_DIR}/ipc_consumer.c"
+IPC_PRODUCER_EXE="${IPC_SRC_DIR}/ipc_producer"
+IPC_CONSUMER_EXE="${IPC_SRC_DIR}/ipc_consumer"
 IPC_RUN_SCRIPT="${IPC_SRC_DIR}/run_ipc_test.sh"
 
 # ITC Paths
-ITC_SRC_DIR="${SCRIPT_DIR}/../src/03_thread_itc_app"
-ITC_SRC="${ITC_SRC_DIR}/thread_producer_consumer.c"
+ITC_SRC_DIR="${SCRIPT_DIR}/../src/04_performance_comparison/ipc_itc"
+ITC_SRC="${ITC_SRC_DIR}/itc_producer_consumer.c"
 ITC_EXE="./thread_test_batch" # Use a unique name for the temporary executable
 
 # --- Pre-run Checks ---

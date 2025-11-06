@@ -66,15 +66,15 @@ PROFILING_MIN_PRODUCT_COUNT=1000
 # Source code paths
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-THREAD_SRC="${PROJECT_ROOT_DIR}/src/03_thread_itc_app/thread_producer_consumer.c"
-PROCESS_PRODUCER_SRC="${PROJECT_ROOT_DIR}/src/02_process_ipc_app/producer.c"
-PROCESS_CONSUMER_SRC="${PROJECT_ROOT_DIR}/src/02_process_ipc_app/consumer.c"
-IPC_RUN_SCRIPT="${PROJECT_ROOT_DIR}/src/02_process_ipc_app/run_ipc_test.sh"
+THREAD_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/itc_producer_consumer.c"
+PROCESS_PRODUCER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_producer.c"
+PROCESS_CONSUMER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_consumer.c"
+IPC_RUN_SCRIPT="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/run_ipc_test.sh"
 
 # Compiled executable names
 THREAD_EXE="${SCRIPT_DIR}/temp_thread_test"
-PROCESS_PRODUCER_EXE="${PROJECT_ROOT_DIR}/src/02_process_ipc_app/producer"
-PROCESS_CONSUMER_EXE="${PROJECT_ROOT_DIR}/src/02_process_ipc_app/consumer"
+PROCESS_PRODUCER_EXE="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_producer"
+PROCESS_CONSUMER_EXE="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_consumer"
 
 # Output directory
 RESULTS_DIR="${SCRIPT_DIR}/results"

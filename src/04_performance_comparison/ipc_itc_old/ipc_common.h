@@ -25,13 +25,12 @@
 
 
 typedef struct{
-    pthread_mutex_t mutex;
-    pthread_cond_t product_cond;
-    pthread_cond_t space_cond;
+    sem_t semaphore;
+    sem_t product;
+    sem_t space;
     
 
-    // --- Circular buffer ---
-    int message_ready;
+    // shared data
     char message[BUFFER_SIZE][MAX_MESSAGE_LEN];
     int curr_producer, curr_consumer;
 

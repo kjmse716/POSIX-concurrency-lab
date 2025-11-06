@@ -14,17 +14,15 @@ static volatile uint64_t final_checksum;
 void consumer(shared_data *data_ptr){
 
     for(int i = 0;i<NUM_PRODUCTS;i++){
-        // protect read/write critical region
-        if(pthread_mutex_lock(&data_ptr->mutex) != 0){
-            perror("consumer mutex_lock failed.");
+        // look for a product.
+        if(sem_wait(&data_ptr->product) == -1){
+            perror("sem_wait(&data_ptr->product).");
             break;
         }
-
-        // wait for a product 
-        while (data_ptr->message_ready < 1) {
-            if (pthread_cond_wait(&data_ptr->product_cond, &data_ptr->mutex) != 0) {
-                perror("consumer pthread_cond_wait(product_cond) failed.");
-            }
+        // protect read/write critical region
+        if(sem_wait(&data_ptr->semaphore) == -1){
+            perror("sem_wait(&data_ptr->semaphore).");
+            break;
         }
 
         // Read and print data from shared memory
@@ -38,17 +36,18 @@ void consumer(shared_data *data_ptr){
 
 
         data_ptr->curr_consumer = (data_ptr->curr_consumer + 1) % BUFFER_SIZE;
-        data_ptr->message_ready -= 1;
 
-        if(pthread_cond_signal(&data_ptr->space_cond) != 0){
-            perror("consumer cond_signal failed.");
+
+        if(sem_post(&data_ptr->semaphore) == -1){
+            perror("em_post(&data_ptr->semaphore)");
             break;
         }
-        
-        if(pthread_mutex_unlock(&data_ptr->mutex) != 0){
-            perror("consumer mutex_unlock failed.");
+
+        if(sem_post(&data_ptr->space) == -1){
+            perror("sem_post(&data_ptr->space)");
             break;
         }
+    
     }    
     sem_post(&data_ptr->complete);
 
@@ -92,7 +91,7 @@ int main()
     close(file_descriptor);
 
 
-    // --- Initialize mutex ---
+    // --- Initialize semaphore ---
     shared_data *data_ptr = (shared_data*)buffer;
 
     // --- For time Measurement ---

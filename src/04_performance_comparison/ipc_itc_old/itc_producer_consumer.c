@@ -34,8 +34,8 @@ static char template_message[MAX_MESSAGE_LEN];
 
 typedef struct {
     pthread_mutex_t mutex;
-    pthread_cond_t product_cond;
-    pthread_cond_t space_cond;
+    pthread_cond_t  product_cond;
+    pthread_cond_t  space_cond;
     
     
     // --- Circular buffer ---
@@ -113,7 +113,7 @@ void* consumer(void* arg) {
 
     for (int i = 0; i < NUM_PRODUCTS; i++) {
         if (pthread_mutex_lock(&data_ptr->mutex) != 0) {
-            perror("consumer pthread_mutex_lock failed.");
+            perror("pthread_mutex_lock");
             break;
         }
         
@@ -173,7 +173,6 @@ int main() {
 
     data.curr_producer = 0;
     data.curr_consumer = 0;
-    data.message_ready = 0; // no product at start.
 
     // --- Init semaphores for time measurement ---
     // pshared mode 0:shared between threads, initial value 0.
@@ -193,7 +192,8 @@ int main() {
         return EXIT_FAILURE;
     }
 
-    
+    // no product at start.
+    data.message_ready = 0; 
     LOG("pthread mutex & condvars init OK.\n");
 
     // create threads
@@ -243,13 +243,9 @@ int main() {
 
     
     // --- Destroy mutex and condition variables ---
-    if( pthread_mutex_destroy(&data.mutex) != 0||
-        pthread_cond_destroy(&data.space_cond) != 0 ||
-        pthread_cond_destroy(&data.product_cond) != 0){
-        perror("mutex, cond destroy failed.");
-        return EXIT_FAILURE;
-    }
-
+    pthread_mutex_destroy(&data.mutex);
+    pthread_cond_destroy(&data.product_cond);
+    pthread_cond_destroy(&data.space_cond);
     LOG("pthread mutex and cond destroyed successfully.\n");
 
 

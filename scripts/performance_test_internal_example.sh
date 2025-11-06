@@ -15,9 +15,9 @@ MESSAGE_LENS=(64 256 1500)    # Added message length test cases
 OUTPUT_FILE="results.csv"
 
 # Source code files.
-THREAD_SRC="./src/04_performance_comparison/itc_producer_consumer.c"
-PROCESS_PRODUCER_SRC="./src/04_performance_comparison/ipc_producer.c"
-PROCESS_CONSUMER_SRC="./src/04_performance_comparison/ipc_consumer.c"
+THREAD_SRC="./src/04_performance_comparison/ipc_itc/itc_producer_consumer.c"
+PROCESS_PRODUCER_SRC="./src/04_performance_comparison/ipc_itc/ipc_producer.c"
+PROCESS_CONSUMER_SRC="./src/04_performance_comparison/ipc_itc/ipc_consumer.c"
 
 # Names for our compiled executables.
 THREAD_EXE="./thread_test"
