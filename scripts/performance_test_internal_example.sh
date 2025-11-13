@@ -1,6 +1,32 @@
 #!/bin/bash
 
-# --- Configuration ---
+# =====================================================================
+# Performance Test Script (v1.1 - Affinity-Aware Executor)
+#
+# 角色:
+# 這是一個「親和性感知的測試執行器」。
+# 它被設計為由一個「環境設定 Wrapper」 (例如 run_with_cpu_shield.sh) 呼叫。
+#
+# 用法:
+# ./scripts/performance_test_internal_example.sh [affinity_mode] [core_a] [core_b]
+#
+# 範例 (由 Wrapper 呼叫):
+# (sudo ./scripts/run_with_cpu_shield.sh "6,7" ./scripts/performance_test_internal_example.sh rt-cross-core 6 7)
+#
+# 範例 (獨立執行，不受控):
+# ./scripts/performance_test_internal_example.sh unlimited
+# =====================================================================
+
+
+# --- 1. 路徑設定 (強化版) ---
+
+# 取得此腳本所在的目錄
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+# 專案根目錄 (假設此腳本在 'scripts' 資料夾中)
+PROJECT_ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+
+# --- 2. 組態設定 ---
 
 # Number of runs for each test case. average the results for accuracy.
 NUM_RUNS=5
@@ -13,29 +39,26 @@ PRODUCT_COUNTS=(100000000)
 BUFFER_SIZES=({1..100}) # Added buffer size test cases
 MESSAGE_LENS=(64)      # Added message length test cases
 
-OUTPUT_FILE="results_${AFFINITY_MODE}.csv" # 讓不同模式的結果保存在不同檔案
-
 # Source code files.
-THREAD_SRC="./src/04_performance_comparison/ipc_itc/itc_producer_consumer.c"
-PROCESS_PRODUCER_SRC="./src/04_performance_comparison/ipc_itc/ipc_producer.c"
-PROCESS_CONSUMER_SRC="./src/04_performance_comparison/ipc_itc/ipc_consumer.c"
+THREAD_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/itc_producer_consumer.c"
+PROCESS_PRODUCER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_producer.c"
+PROCESS_CONSUMER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_consumer.c"
 
-# Names for our compiled executables.
-THREAD_EXE="./thread_test"
-PROCESS_PRODUCER_EXE="./process_producer"
-PROCESS_CONSUMER_EXE="./process_consumer"
+# Names for our compiled executables (放置於 scripts 目錄下)
+THREAD_EXE="${SCRIPT_DIR}/temp_thread_test"
+PROCESS_PRODUCER_EXE="${SCRIPT_DIR}/temp_process_producer"
+PROCESS_CONSUMER_EXE="${SCRIPT_DIR}/temp_process_consumer"
 
 
-# --- CPU Affinity Configuration ---
+# --- 3. CPU Affinity 參數解析 ---
 AFFINITY_MODE="$1" # 從第一個參數讀取模式
-CORE_A=0           # (舊版 cross-core/single-core) 測試用的第一個 CPU 核心
-CORE_B=1           # (舊版 cross-core) 測試用的第二個 CPU 核心
+CORE_A="$2"
+CORE_B="$3"
 
-# 'rt-*' 模式會從 $2 和 $3 讀取核心
-CORE_RT_A="$2"
-CORE_RT_B="$3"
+# 輸出檔案 (放置於 scripts 目錄下)
+OUTPUT_FILE="${SCRIPT_DIR}/results_internal_${AFFINITY_MODE}.csv" 
 
-# --- 模式驗證 (更穩健的版本) ---
+# --- 模式驗證 ---
 VALID_MODES=" unlimited single-core cross-core rt-single-core rt-cross-core "
 if ! echo "${VALID_MODES}" | grep -q " ${AFFINITY_MODE} "; then
     echo "錯誤: 無效的 CPU 親和性模式 '$AFFINITY_MODE'."
@@ -44,15 +67,13 @@ if ! echo "${VALID_MODES}" | grep -q " ${AFFINITY_MODE} "; then
 fi
 
 # 檢查 RT 模式是否提供了足夠的參數
-if [[ "$AFFINITY_MODE" == "rt-cross-core" && ( -z "$CORE_RT_A" || -z "$CORE_RT_B" ) ]]; then
+if [[ "$AFFINITY_MODE" == "rt-cross-core" && ( -z "$CORE_A" || -z "$CORE_B" ) ]]; then
     echo "錯誤: rt-cross-core 模式需要提供兩個核心 ID。"
-    echo "用法: (此腳本應由 run_rt_test.sh 呼叫)"
     exit 1
 fi
 
-if [[ "$AFFINITY_MODE" == "rt-single-core" && -z "$CORE_RT_A" ]]; then
+if [[ "$AFFINITY_MODE" == "rt-single-core" && -z "$CORE_A" ]]; then
     echo "錯誤: rt-single-core 模式需要提供一個核心 ID。"
-    echo "用法: (此腳本應由 run_rt_test.sh 呼叫)"
     exit 1
 fi
 
@@ -62,7 +83,7 @@ echo ">> 正在以模式運行: ${AFFINITY_MODE}"
 echo "===================================================="
 
 
-# --- 根據模式設定 Taskset 命令前綴 ---
+# --- 4. 根據模式設定 Taskset 命令前綴 ---
 THREAD_CMD_PREFIX=""
 PRODUCER_CMD_PREFIX=""
 CONSUMER_CMD_PREFIX=""
@@ -88,34 +109,25 @@ case "$AFFINITY_MODE" in
         THREAD_COMPILE_FLAGS=""
         ;;
 
-    # --- (新) Real-Time 模式 ---
-
     "rt-single-core")
-        echo ">> 綁定模式: Real-Time 單一核心 (CPU Core ${CORE_RT_A})"
+        echo ">> 綁定模式: Real-Time 單一核心 (CPU Core ${CORE_A})"
         echo ">> 優先權: SCHED_FIFO (real-time)"
-        # chrt -f 99: 將程式設為 SCHED_FIFO (即時排程)，優先權 99 (最高)
-        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_RT_A}"
-        PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_RT_A}"
-        CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_RT_A}"
-        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_RT_A} -DCONSUMER_CORE_ID=${CORE_RT_A}"
+        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_A}"
         ;;
 
     "rt-cross-core")
-        echo ">> 綁定模式: Real-Time 跨核心 (Producer: ${CORE_RT_A}, Consumer: ${CORE_RT_B})"
+        echo ">> 綁定模式: Real-Time 跨核心 (Producer: ${CORE_A}, Consumer: ${CORE_B})"
         echo ">> 優先權: SCHED_FIFO (real-time)"
-        
-        # chrt -f 99: 將程式設為 SCHED_FIFO (即時排程)，優先權 99 (最高)
-        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_RT_A},${CORE_RT_B}" 
-        PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_RT_A}"
-        CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_RT_B}"
-        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_RT_A} -DCONSUMER_CORE_ID=${CORE_RT_B}"
+        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A},${CORE_B}" 
+        PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_B}"
+        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_B}"
         ;;
 esac
 echo "----------------------------------------------------"
-
-
-
-
 
 
 echo "IPC Performance Test Script"
@@ -123,12 +135,11 @@ echo "Each test case will run ${NUM_RUNS} times."
 echo "Rest interval between runs is ${REST_INTERVAL_S} seconds."
 echo "Results will be saved to: ${OUTPUT_FILE}"
 
-# Set up the CSV file and write the header with the new BufferSize + MessageLen columns.
-# 替換掉舊檔案
+# Set up the CSV file and write the header.
 echo "TestType,ProductCount,BufferSize,MessageLen,AvgInitTime,AvgCommTime" > ${OUTPUT_FILE}
 
 
-# --- Main test loop ---
+# --- 5. Main test loop ---
 for size in "${BUFFER_SIZES[@]}"; do
     for count in "${PRODUCT_COUNTS[@]}"; do
         for msg_len in "${MESSAGE_LENS[@]}"; do
@@ -158,13 +169,12 @@ for size in "${BUFFER_SIZES[@]}"; do
                 echo -ne "               - Running iteration ${j}/${NUM_RUNS}...\r"
                 sleep ${REST_INTERVAL_S}
                 
-                # *** MODIFICATION: Added command prefix ***
+                # *** 執行綁定 ***
                 result=$( ${THREAD_CMD_PREFIX} ${THREAD_EXE} )
                 
                 init_time=$(echo "$result" | awk -F',' '{print $1}')
                 comm_time=$(echo "$result" | awk -F',' '{print $2}')
                 
-                # 【修正】: 原本這裡是 t1+t1+t2，已修正為 t1+t2
                 total_init_time=$(awk -v t1="$total_init_time" -v t2="$init_time" 'BEGIN{print t1+t2}')
                 total_comm_time=$(awk -v t1="$total_comm_time" -v t2="$comm_time" 'BEGIN{print t1+t2}')
             done
@@ -195,7 +205,7 @@ for size in "${BUFFER_SIZES[@]}"; do
                 echo -ne "               - Running iteration ${j}/${NUM_RUNS}...\r"
                 sleep ${REST_INTERVAL_S}
 
-                # *** MODIFICATION: Added command prefixes ***
+                # *** 執行綁定 ***
                 ${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} &
                 result=$( ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE} )
                 
@@ -219,20 +229,15 @@ for size in "${BUFFER_SIZES[@]}"; do
 done
 
 
-# --- Cleanup ---
+# --- 6. Cleanup ---
 echo "----------------------------------------------------"
 echo ">> Tests finished. Cleaning up compiled files..."
 rm -f ${THREAD_EXE} ${PROCESS_PRODUCER_EXE} ${PROCESS_CONSUMER_EXE}
 
-
-# $SECONDS 會自動回報從腳本開始到現在所經過的秒數
-
 echo "-------------------------------------"
-
 hours=$((SECONDS / 3600))
 minutes=$(((SECONDS % 3600) / 60))
 seconds=$((SECONDS % 60))
-
 echo "所有測試完成，總共花費：${hours} 小時 ${minutes} 分 ${seconds} 秒"
 
 echo ">> Complete. results are in ${OUTPUT_FILE}"

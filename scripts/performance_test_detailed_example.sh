@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# Comprehensive IPC/ITC Performance Test Script (Final Corrected Version)
+# Comprehensive IPC/ITC Performance Test Script (v1.1 - Affinity-Aware)
 #
 # It measures:
 # 1. Basic Timing: For apples-to-apples comparison.
@@ -48,14 +48,18 @@
 #
 #   # 安裝對應核心版本的 debug symbol
 #   sudo apt-get install linux-image-$(uname -r)-dbgsym
+#
+# 用法:
+# ./scripts/performance_test_detailed_example.sh [affinity_mode] [core_a] [core_b]
+#
+# 範例 (由 run_with_cpu_shield.sh 呼叫):
+# (sudo ./scripts/run_with_cpu_shield.sh "6,7" ./scripts/performance_test_detailed_example.sh rt-cross-core 6 7)
 # ==============================================================================
-
-
 
 # --- Configuration ---
 export FLAMEGRAPH_DIR="/home/kjmse716/Documents/Labs/POSIX-concurrency-lab/library/FlameGraph"
 
-NUM_RUNS=50
+NUM_RUNS=50 # 注意: 您的範例檔中這裡是 50，不是 200
 REST_INTERVAL_S=0.1
 PRODUCT_COUNTS=(10000 100000 1000000)
 BUFFER_SIZES=({1..100})
@@ -66,23 +70,72 @@ PROFILING_MIN_PRODUCT_COUNT=1000
 # Source code paths
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-THREAD_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/itc_producer_consumer.c"
-PROCESS_PRODUCER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_producer.c"
-PROCESS_CONSUMER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_consumer.c"
-IPC_RUN_SCRIPT="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/run_ipc_test.sh"
+
+# (假設路徑正確)
+V4_SRC_DIR="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc"
+THREAD_SRC="${V4_SRC_DIR}/itc_producer_consumer.c"
+PROCESS_PRODUCER_SRC="${V4_SRC_DIR}/ipc_producer.c"
+PROCESS_CONSUMER_SRC="${V4_SRC_DIR}/ipc_consumer.c"
 
 # Compiled executable names
 THREAD_EXE="${SCRIPT_DIR}/temp_thread_test"
-PROCESS_PRODUCER_EXE="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_producer"
-PROCESS_CONSUMER_EXE="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_consumer"
-
-# Output directory
-RESULTS_DIR="${SCRIPT_DIR}/results"
-TIMING_CSV_FILE="${RESULTS_DIR}/timing_results.csv"
+PROCESS_PRODUCER_EXE="${V4_SRC_DIR}/ipc_producer"
+PROCESS_CONSUMER_EXE="${V4_SRC_DIR}/ipc_consumer"
 
 # FlameGraph script paths
 STACKCOLLAPSE_SCRIPT="${FLAMEGRAPH_DIR}/stackcollapse-perf.pl"
 FLAMEGRAPH_SCRIPT="${FLAMEGRAPH_DIR}/flamegraph.pl"
+
+
+# --- 1. Affinity 參數解析 ---
+AFFINITY_MODE="$1"
+CORE_A="$2"
+CORE_B="$3"
+
+PRODUCER_CMD_PREFIX=""
+CONSUMER_CMD_PREFIX=""
+THREAD_CMD_PREFIX=""
+THREAD_COMPILE_FLAGS="" # C 語言編譯旗標
+
+# 預設為 unlimited
+if [ -z "$AFFINITY_MODE" ]; then
+    AFFINITY_MODE="unlimited"
+fi
+
+# Output directory
+RESULTS_DIR="${SCRIPT_DIR}/results_detailed_${AFFINITY_MODE}"
+TIMING_CSV_FILE="${RESULTS_DIR}/timing_results.csv"
+
+echo "===================================================="
+echo ">> 正在以模式運行: ${AFFINITY_MODE}"
+echo ">> 結果將儲存至: ${RESULTS_DIR}"
+echo "===================================================="
+
+case "$AFFINITY_MODE" in
+    "rt-single-core")
+        echo "   - 綁定: Real-Time 單一核心 (Core ${CORE_A})"
+        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_A}"
+        ;;
+    "rt-cross-core")
+        echo "   - 綁定: Real-Time 跨核心 (P:${CORE_A}, C:${CORE_B})"
+        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A},${CORE_B}" 
+        PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_B}"
+        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_B}"
+        ;;
+    "unlimited")
+        echo "   - 綁定: 不限制 (unlimited)"
+        ;;
+    *)
+        echo "錯誤: 不支援的模式 '$AFFINITY_MODE'"
+        exit 1
+        ;;
+esac
+echo "----------------------------------------------------"
+
 
 # --- Pre-run Checks ---
 if [[ $EUID -ne 0 ]]; then
@@ -95,18 +148,15 @@ if [ ! -f "$STACKCOLLAPSE_SCRIPT" ] || [ ! -f "$FLAMEGRAPH_SCRIPT" ]; then
      AUTO_FLAMEGRAPH=false
 fi
 mkdir -p "$RESULTS_DIR"
-echo ">> 結果將儲存至： ${RESULTS_DIR}"
 
 # --- Initialization ---
 cleanup() {
     echo ">> 清理暫存檔案..."
-    rm -f "$THREAD_EXE"
-    if [ -f "${PROJECT_ROOT_DIR}/src/02_process_ipc_app/Makefile" ]; then
-        (cd "${PROJECT_ROOT_DIR}/src/02_process_ipc_app" && make clean) > /dev/null 2>&1
-    fi
+    rm -f "$THREAD_EXE" "$PROCESS_PRODUCER_EXE" "$PROCESS_CONSUMER_EXE"
+    # (移除 make clean，因為我們不再依賴 v4 src dir 中的 Makefile)
 }
-trap cleanup EXIT # This trap ensures cleanup runs at the very end of the script
-cleanup # Initial cleanup
+trap cleanup EXIT 
+cleanup 
 
 echo "TestType,ProductCount,BufferSize,MessageLen,AvgInitTime_s,AvgCommTime_s" > "$TIMING_CSV_FILE"
 
@@ -137,27 +187,27 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             PERF_REPORT_FLAT_FILE="${OUTPUT_PREFIX}_perf_report_flat.txt"
 
             echo "       - 編譯 ITC 原始碼 (帶有除錯資訊)..."
-            gcc "$THREAD_SRC" -o "$THREAD_EXE" -g -DNUM_PRODUCTS="$pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
+            gcc "$THREAD_SRC" -o "$THREAD_EXE" -g -DNUM_PRODUCTS="$pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" ${THREAD_COMPILE_FLAGS} -lpthread -lrt
             if [ $? -ne 0 ]; then echo "       !! ITC 編譯失敗。"; continue; fi
 
             echo "       - 執行基本計時測試 (${NUM_RUNS} 次)..."
-            result=$("$THREAD_EXE"); init_time=$(echo "$result" | cut -d',' -f1); comm_time=$(echo "$result" | cut -d',' -f2)
+            result=$( ${THREAD_CMD_PREFIX} "$THREAD_EXE" ); init_time=$(echo "$result" | cut -d',' -f1); comm_time=$(echo "$result" | cut -d',' -f2)
             echo "${MODEL_TYPE},${pcount},${bsize},${mlen},${init_time},${comm_time}" >> "$TIMING_CSV_FILE"
             echo "         平均 Init: ${init_time}s, Comm: ${comm_time}s"
 
             echo "       - 執行 strace 和 perf stat..."
-            strace -T -c -f -e "$STRACE_ITC_EVENTS" "$THREAD_EXE" > "${OUTPUT_PREFIX}_strace_summary.txt" 2>&1
-            perf stat -d -e "$PERF_EVENTS" "$THREAD_EXE" > "${OUTPUT_PREFIX}_perf_stat.txt" 2>&1
+            strace -T -c -f -e "$STRACE_ITC_EVENTS" ${THREAD_CMD_PREFIX} "$THREAD_EXE" > "${OUTPUT_PREFIX}_strace_summary.txt" 2>&1
+            perf stat -d -e "$PERF_EVENTS" ${THREAD_CMD_PREFIX} "$THREAD_EXE" > "${OUTPUT_PREFIX}_perf_stat.txt" 2>&1
 
             perf_pcount=$pcount
             if (( pcount < PROFILING_MIN_PRODUCT_COUNT )); then
                 perf_pcount=$PROFILING_MIN_PRODUCT_COUNT
                 echo "       - 為了 profiling，使用更大的工作負載 (${perf_pcount}) 重新編譯..."
-                gcc "$THREAD_SRC" -o "$THREAD_EXE" -g -DNUM_PRODUCTS="$perf_pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
+                gcc "$THREAD_SRC" -o "$THREAD_EXE" -g -DNUM_PRODUCTS="$perf_pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" ${THREAD_COMPILE_FLAGS} -lpthread -lrt
             fi
 
             echo "       - 執行 perf record..."
-            perf record -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- "$THREAD_EXE" > /dev/null 2>&1
+            perf record -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- ${THREAD_CMD_PREFIX} "$THREAD_EXE" > /dev/null 2>&1
 
             if [ -s "$PERF_DATA_FILE" ]; then
                 echo "       - 生成 perf report 文字報告 (標準 & 平坦)..."
@@ -181,41 +231,47 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             PERF_REPORT_FILE="${OUTPUT_PREFIX}_perf_report.txt"
             PERF_REPORT_FLAT_FILE="${OUTPUT_PREFIX}_perf_report_flat.txt"
 
-            echo "       - 清理並編譯 IPC 原始碼 (帶有除錯資訊)..."
-            # --- FIX STARTS HERE ---
-            # 關鍵修正：在編譯前先執行 'make clean'，強制重新生成執行檔
-            (cd "${PROJECT_ROOT_DIR}/src/02_process_ipc_app" && \
-             make clean && \
-             make CFLAGS+="-g -DNUM_PRODUCTS=$pcount -DBUFFER_SIZE=$bsize -DMAX_MESSAGE_LEN=$mlen")
-            # --- FIX ENDS HERE ---
+            echo "       - 編譯 IPC 原始碼 (帶有除錯資訊)..."
+            # 【修復】: 從 make 改為直接使用 gcc
+            gcc "${PROCESS_PRODUCER_SRC}" -o ${PROCESS_PRODUCER_EXE} -g -DNUM_PRODUCTS="$pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
+            gcc "${PROCESS_CONSUMER_SRC}" -o ${PROCESS_CONSUMER_EXE} -g -DNUM_PRODUCTS="$pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
             
-            if [ ! -f "$PROCESS_PRODUCER_EXE" ] || [ ! -f "$PROCESS_CONSUMER_EXE" ]; then
+            if [ $? -ne 0 ]; then
                 echo "       !! IPC 編譯失敗。"; continue;
             fi
             
             echo "       - 執行基本計時測試 (${NUM_RUNS} 次)..."
-            result=$("$IPC_RUN_SCRIPT" 2>/dev/null | grep '^[0-9\.]\+,[0-9\.]\+$'); init_time=$(echo "$result" | cut -d',' -f1); comm_time=$(echo "$result" | cut -d',' -f2)
+            # 【修改】: 手動啟動 consumer & producer
+            ${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} &
+            CONSUMER_PID=$!
+            result=$( ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE} 2>/dev/null | grep '^[0-9\.]\+,[0-9\.]\+$' )
+            wait $CONSUMER_PID
+            
+            init_time=$(echo "$result" | cut -d',' -f1); comm_time=$(echo "$result" | cut -d',' -f2)
             echo "${MODEL_TYPE},${pcount},${bsize},${mlen},${init_time},${comm_time}" >> "$TIMING_CSV_FILE"
             echo "         平均 Init: ${init_time}s, Comm: ${comm_time}s"
             
             echo "       - 執行 strace 和 perf stat..."
-            strace -T -c -f -e "$STRACE_IPC_EVENTS" "$IPC_RUN_SCRIPT" > "${OUTPUT_PREFIX}_strace_summary.txt" 2>&1
-            perf stat -d -e "$PERF_EVENTS" "$IPC_RUN_SCRIPT" > "${OUTPUT_PREFIX}_perf_stat.txt" 2>&1
+            # 【修改】: 使用 bash -c "cmd1 & cmd2; wait" 來包裝兩個行程
+            strace -T -c -f -e "$STRACE_IPC_EVENTS" -o "${OUTPUT_PREFIX}_strace_summary.txt" \
+                bash -c "${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} & ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE}; wait" > /dev/null 2>&1
+                
+            perf stat -d -e "$PERF_EVENTS" -o "${OUTPUT_PREFIX}_perf_stat.txt" \
+                bash -c "${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} & ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE}; wait" > /dev/null 2>&1
 
             perf_pcount=$pcount
             if (( pcount < PROFILING_MIN_PRODUCT_COUNT )); then
                 perf_pcount=$PROFILING_MIN_PRODUCT_COUNT
                 echo "       - 為了 profiling，使用更大的工作負載 (${perf_pcount}) 重新編譯..."
-                # --- FIX STARTS HERE ---
-                # 同樣地，profiling 的部分也要先 clean
-                (cd "${PROJECT_ROOT_DIR}/src/02_process_ipc_app" && \
-                 make clean && \
-                 make CFLAGS+="-g -DNUM_PRODUCTS=$perf_pcount -DBUFFER_SIZE=$bsize -DMAX_MESSAGE_LEN=$mlen")
-                # --- FIX ENDS HERE ---
+                # 【修復】: 同樣，直接使用 gcc
+                gcc "${PROCESS_PRODUCER_SRC}" -o ${PROCESS_PRODUCER_EXE} -g -DNUM_PRODUCTS="$perf_pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
+                gcc "${PROCESS_CONSUMER_SRC}" -o ${PROCESS_CONSUMER_EXE} -g -DNUM_PRODUCTS="$perf_pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
             fi
 
             echo "       - 執行 perf record..."
-            perf record -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- "$IPC_RUN_SCRIPT" > /dev/null 2>&1
+            # 【修改】: 同樣使用 bash -c "..." 技巧
+            perf record -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- \
+                bash -c "${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} & ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE}; wait" > /dev/null 2>&1
             
             if [ -s "$PERF_DATA_FILE" ]; then
                 echo "       - 生成 perf report 文字報告 (標準 & 平坦)..."
@@ -241,15 +297,5 @@ echo "# 測試完成                                       #"
 echo "####################################################"
 echo ">> 計時結果儲存於： ${TIMING_CSV_FILE}"
 echo ">> Strace, Perf Stat, Perf Report (標準 & 平坦 .txt), Perf Data (.data), 和火焰圖 (.svg) 儲存於： ${RESULTS_DIR}"
-
-# $SECONDS 會自動回報從腳本開始到現在所經過的秒數
-
-echo "-------------------------------------"
-
-hours=$((SECONDS / 3600))
-minutes=$(((SECONDS % 3600) / 60))
-seconds=$((SECONDS % 60))
-
-echo "所有測試完成，總共花費：${hours} 小時 ${minutes} 分 ${seconds} 秒"
 
 exit 0

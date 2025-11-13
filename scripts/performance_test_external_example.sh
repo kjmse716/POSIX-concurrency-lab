@@ -1,11 +1,7 @@
 #!/bin/bash
 
 # =====================================================================
-# Comprehensive Performance Test Script (v4 - Batch Edition)
-#
-# Author: Gemini (as 資深聯發科韌體主管)
-# Date: 2025-10-30
-#
+# Comprehensive Performance Test Script (v4.1 - Affinity-Aware)
 # Objective:
 #   To conduct a rigorous, large-scale performance comparison between
 #   Inter-Process Communication (IPC) and Inter-Thread Communication (ITC)
@@ -20,12 +16,17 @@
 #
 #   The "AvgInitTime" is taken from the program's internal timer,
 #   representing the setup phase before the main communication loop.
+#
+# 用法:
+# ./scripts/performance_test_external_example.sh [affinity_mode] [core_a] [core_b]
+#
+# 範例 (由 run_with_cpu_shield.sh 呼叫):
+# (sudo ./scripts/run_with_cpu_shield.sh "6,7" ./scripts/performance_test_external_example.sh rt-cross-core 6 7)
 # =====================================================================
 
 # --- Configuration ---
 NUM_RUNS=200
 REST_INTERVAL_S=0.1
-OUTPUT_FILE="results.csv"
 
 # --- Test Cases ---
 PRODUCT_COUNTS=(10000 5000 100000)
@@ -34,31 +35,71 @@ MESSAGE_LENS=(64 256 1500 64000)
 
 # --- Path Configuration ---
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+PROJECT_ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# IPC Paths
-IPC_SRC_DIR="${SCRIPT_DIR}/../src/04_performance_comparison/ipc_itc"
-IPC_PRODUCER_SRC="${IPC_SRC_DIR}/ipc_producer.c"
-IPC_CONSUMER_SRC="${IPC_SRC_DIR}/ipc_consumer.c"
-IPC_PRODUCER_EXE="${IPC_SRC_DIR}/ipc_producer"
-IPC_CONSUMER_EXE="${IPC_SRC_DIR}/ipc_consumer"
-IPC_RUN_SCRIPT="${IPC_SRC_DIR}/run_ipc_test.sh"
+# IPC/ITC Paths (v4)
+SRC_DIR="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc"
+IPC_PRODUCER_SRC="${SRC_DIR}/ipc_producer.c"
+IPC_CONSUMER_SRC="${SRC_DIR}/ipc_consumer.c"
+ITC_SRC="${SRC_DIR}/itc_producer_consumer.c"
 
-# ITC Paths
-ITC_SRC_DIR="${SCRIPT_DIR}/../src/04_performance_comparison/ipc_itc"
-ITC_SRC="${ITC_SRC_DIR}/itc_producer_consumer.c"
+IPC_PRODUCER_EXE="${SRC_DIR}/ipc_producer"
+IPC_CONSUMER_EXE="${SRC_DIR}/ipc_consumer"
 ITC_EXE="./thread_test_batch" # Use a unique name for the temporary executable
+
+# --- 1. Affinity 參數解析 ---
+AFFINITY_MODE="$1"
+CORE_A="$2"
+CORE_B="$3"
+
+PRODUCER_CMD_PREFIX=""
+CONSUMER_CMD_PREFIX=""
+THREAD_CMD_PREFIX=""
+THREAD_COMPILE_FLAGS="" # C 語言編譯旗標
+
+# 預設為 unlimited
+if [ -z "$AFFINITY_MODE" ]; then
+    AFFINITY_MODE="unlimited"
+fi
+
+OUTPUT_FILE="results_external_${AFFINITY_MODE}.csv"
+
+echo "=========================================================="
+echo ">> 正在以模式運行: ${AFFINITY_MODE}"
+echo ">> 結果將儲存至: ${OUTPUT_FILE}"
+echo "=========================================================="
+
+case "$AFFINITY_MODE" in
+    "rt-single-core")
+        echo "   - 綁定: Real-Time 單一核心 (Core ${CORE_A})"
+        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_A}"
+        ;;
+    "rt-cross-core")
+        echo "   - 綁定: Real-Time 跨核心 (P:${CORE_A}, C:${CORE_B})"
+        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A},${CORE_B}" 
+        PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
+        CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_B}"
+        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_B}"
+        ;;
+    "unlimited")
+        echo "   - 綁定: 不限制 (unlimited)"
+        ;;
+    *)
+        echo "錯誤: 不支援的模式 '$AFFINITY_MODE'"
+        exit 1
+        ;;
+esac
+echo "----------------------------------------------------"
+
 
 # --- Pre-run Checks ---
 if [[ $EUID -ne 0 ]]; then
     echo "!! ERROR: This script requires root privileges (use sudo) to run 'perf stat'."
     exit 1
 fi
-
-echo "=========================================================="
-echo "Starting Comprehensive IPC vs. ITC Performance Test..."
-echo "Number of runs per test case: ${NUM_RUNS}"
-echo "Results will be saved to: ${OUTPUT_FILE}"
-echo "=========================================================="
 
 # Setup CSV file header
 echo "TestType,ProductCount,NumberOfBufferSlots,MessageLen,AvgInitTime,AvgCommTime" > ${OUTPUT_FILE}
@@ -72,7 +113,8 @@ for pcount in "${PRODUCT_COUNTS[@]}"; do
 
       # --- ITC (Thread) Model Test ---
       echo "  [1/2] Running ITC (Thread) Model..."
-      gcc "${ITC_SRC}" -o ${ITC_EXE} -DNUM_PRODUCTS=${pcount} -DBUFFER_SIZE=${bsize} -DMAX_MESSAGE_LEN=${mlen} -lpthread -lrt
+      # 【修改】: 加入 ${THREAD_COMPILE_FLAGS}
+      gcc "${ITC_SRC}" -o ${ITC_EXE} ${THREAD_COMPILE_FLAGS} -DNUM_PRODUCTS=${pcount} -DBUFFER_SIZE=${bsize} -DMAX_MESSAGE_LEN=${mlen} -lpthread -lrt
       if [ $? -ne 0 ]; then
           echo "  !! ITC compilation failed. Skipping."
           continue
@@ -83,7 +125,10 @@ for pcount in "${PRODUCT_COUNTS[@]}"; do
       for ((j=1; j<=NUM_RUNS; j++)); do
           echo -ne "    - ITC Iteration ${j}/${NUM_RUNS}...\r"
           PERF_OUTPUT=$(mktemp)
-          INTERNAL_TIME=$(sudo perf stat -o ${PERF_OUTPUT} ./${ITC_EXE})
+          
+          # 【修改】: 加入 ${THREAD_CMD_PREFIX}
+          INTERNAL_TIME=$(sudo perf stat -o ${PERF_OUTPUT} ${THREAD_CMD_PREFIX} ./${ITC_EXE})
+          
           PERF_TIME=$(grep "seconds time elapsed" ${PERF_OUTPUT} | awk '{print $1}')
           
           init_time=$(echo ${INTERNAL_TIME} | awk -F',' '{print $1}')
@@ -115,7 +160,16 @@ for pcount in "${PRODUCT_COUNTS[@]}"; do
       for ((j=1; j<=NUM_RUNS; j++)); do
           echo -ne "    - IPC Iteration ${j}/${NUM_RUNS}...\r"
           PERF_OUTPUT=$(mktemp)
-          INTERNAL_TIME=$(sudo perf stat -o ${PERF_OUTPUT} ${IPC_RUN_SCRIPT})
+
+          # 【修改】: 手動分離 consumer 和 producer
+          ${CONSUMER_CMD_PREFIX} ${IPC_CONSUMER_EXE} &
+          CONSUMER_PID=$!
+          
+          # Producer 會印出內部時間
+          INTERNAL_TIME=$(sudo perf stat -o ${PERF_OUTPUT} ${PRODUCER_CMD_PREFIX} ${IPC_PRODUCER_EXE})
+          
+          wait $CONSUMER_PID # 等待 consumer 結束
+          
           PERF_TIME=$(grep "seconds time elapsed" ${PERF_OUTPUT} | awk '{print $1}')
 
           init_time=$(echo ${INTERNAL_TIME} | awk -F',' '{print $1}')
@@ -139,17 +193,5 @@ done
 echo "----------------------------------------------------"
 echo ">> Tests finished. Cleaning up compiled files..."
 rm -f ${IPC_PRODUCER_EXE} ${IPC_CONSUMER_EXE} ${ITC_EXE}
-
-# $SECONDS 會自動回報從腳本開始到現在所經過的秒數
-
-echo "-------------------------------------"
-
-hours=$((SECONDS / 3600))
-minutes=$(((SECONDS % 3600) / 60))
-seconds=$((SECONDS % 60))
-
-echo "所有測試完成，總共花費：${hours} 小時 ${minutes} 分 ${seconds} 秒"
-
-
 
 echo ">> Complete. Results are in ${OUTPUT_FILE}"
