@@ -1,9 +1,11 @@
+#define _GNU_SOURCE            // 為了 pthread_setaffinity_np
 #define _POSIX_C_SOURCE 200809L // CLOCK_MONOTONIC 
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>     // macros
-#include <unistd.h>     // sleep
+#include <stdlib.h>      // macros
+#include <unistd.h>      // sleep
 #include <pthread.h>
+#include <sched.h>             // 為了 cpu_set_t 和 sched_setaffinity
 #include <semaphore.h> // for time measurement (wait until threads are ready).
 #include <time.h> 
 #include <stdint.h>
@@ -55,8 +57,37 @@ double get_elapsed_seconds(struct timespec start, struct timespec end) {
 }
 
 
+/**
+ * @brief 將當前運行的 pthread 綁定到指定的 CPU 核心
+ * @param core_id 要綁定的 CPU 核心 ID
+ */
+void pin_thread_to_core(int core_id) {
+    cpu_set_t cpuset;       // CPU 核心的集合
+    CPU_ZERO(&cpuset);      // 清空集合
+    CPU_SET(core_id, &cpuset); // 將指定的核心 ID 加入集合
+
+    pthread_t current_thread = pthread_self(); // 獲取當前的 thread ID
+    
+    // 設置 CPU 親和性
+    if (pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset) != 0) {
+        perror("pthread_setaffinity_np failed");
+        // 注意：這裡我們只印出錯誤，不中止程式，以防萬一
+    } else {
+        LOG("Thread %lu pinned to Core %d\n", (unsigned long)current_thread, core_id);
+    }
+}
+
+
 // Producer thread function
 void* producer(void* arg) {
+
+    // --- CPU Affinity Binding ---
+    // 這必須在 sem_post(ready) 之前完成,
+    // 以確保綁定核心的開銷被算在 init_time 中
+    #ifdef PRODUCER_CORE_ID
+        pin_thread_to_core(PRODUCER_CORE_ID);
+    #endif
+
     shared_data *data_ptr = (shared_data*)arg;
 
     // --- For time measurement ---
@@ -105,6 +136,14 @@ void* producer(void* arg) {
 
 // Consumer thread function
 void* consumer(void* arg) {
+    
+    // --- CPU Affinity Binding ---
+    // 這必須在 sem_post(ready) 之前完成,
+    // 以確保綁定核心的開銷被算在 init_time 中
+    #ifdef CONSUMER_CORE_ID
+        pin_thread_to_core(CONSUMER_CORE_ID);
+    #endif
+    
     shared_data *data_ptr = (shared_data*)arg;
 
     // --- For time measurement ---
@@ -209,7 +248,7 @@ int main() {
     }
     LOG("pthread_create(consumer) success.\n");
 
-    // wait until threads are ready.
+    // wait until threads are ready. (綁定核心的操作在此時完成)
     sem_wait(&data.ready_sem);
     sem_wait(&data.ready_sem);
 

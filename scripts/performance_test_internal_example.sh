@@ -120,4 +120,14 @@ echo "----------------------------------------------------"
 echo ">> Tests finished. Cleaning up compiled files..."
 rm -f ${THREAD_EXE} ${PROCESS_PRODUCER_EXE} ${PROCESS_CONSUMER_EXE}
 
+# $SECONDS 會自動回報從腳本開始到現在所經過的秒數
+
+echo "-------------------------------------"
+
+hours=$((SECONDS / 3600))
+minutes=$(((SECONDS % 3600) / 60))
+seconds=$((SECONDS % 60))
+
+echo "所有測試完成，總共花費：${hours} 小時 ${minutes} 分 ${seconds} 秒"
+
 echo ">> Complete. results are in ${OUTPUT_FILE}"

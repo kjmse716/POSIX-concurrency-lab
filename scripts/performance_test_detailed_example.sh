@@ -242,4 +242,14 @@ echo "####################################################"
 echo ">> 計時結果儲存於： ${TIMING_CSV_FILE}"
 echo ">> Strace, Perf Stat, Perf Report (標準 & 平坦 .txt), Perf Data (.data), 和火焰圖 (.svg) 儲存於： ${RESULTS_DIR}"
 
+# $SECONDS 會自動回報從腳本開始到現在所經過的秒數
+
+echo "-------------------------------------"
+
+hours=$((SECONDS / 3600))
+minutes=$(((SECONDS % 3600) / 60))
+seconds=$((SECONDS % 60))
+
+echo "所有測試完成，總共花費：${hours} 小時 ${minutes} 分 ${seconds} 秒"
+
 exit 0

@@ -2,7 +2,9 @@ results.csv
 performance_test_external.sh
 performance_test_internal.sh
 performance_test_detailed.sh
+run_sheilded_test.sh
 scripts/results
 scripts/off_cpu_results
 performance_test_offcpu.sh
 *.zip
+*.csv
