@@ -1,301 +1,262 @@
 #!/bin/bash
 
 # ==============================================================================
-# Comprehensive IPC/ITC Performance Test Script (v1.1 - Affinity-Aware)
+# Comprehensive IPC/ITC Performance Test Script (v2.3 - Restored Metrics)
 #
-# It measures:
-# 1. Basic Timing: For apples-to-apples comparison.
-# 2. System Call Analysis (strace).
-# 3. Hardware Performance Counters (perf stat).
-# 4. CPU Sampling (perf record) with a larger workload for meaningful Flame Graphs.
-# 5. Flame Graph Generation.
+# 功能：
+# 1. 精確計時：執行多次取平均 (Phase 1)。
+# 2. 硬體計數：自動解析 perf stat (Cache Misses, False Sharing, Ratios)。
+# 3. 系統呼叫：自動解析 strace (Futex Calls)。
+# 4. 完整報告：生成 perf.data, perf report (txt), flamegraph (svg)。
+# 5. 整合輸出：匯總於 CSV。
 #
-# Prerequisites (Ubuntu/Debian):
-#   sudo apt update
-#   sudo apt install strace
-#   sudo apt install linux-tools-common linux-tools-generic linux-tools-$(uname -r)
-#
-#   # After installation, verify:
-#   strace -V
-#   perf --version
-#   
-#   if perf fail, try: sudo ln -sf /usr/lib/linux-tools/$(uname -r)/perf /usr/bin/perf
-#
-# Additional Setup for perf and debug symbols:
-#   # 允許 perf 讀取核心 symbol 位址
-#   sudo sysctl -w kernel.kptr_restrict=0
-#
-#   # 允許 perf 追蹤所有 CPU 和行程的事件（通常在 profiling 時需要）
-#   sudo sysctl -w kernel.perf_event_paranoid=-1
-#
-#   # 安裝對應你核心版本的 linux-tools
-#   sudo apt-get install linux-tools-$(uname -r)
-#
-#   # 使用 lsb_release -cs 來自動獲取你的 Ubuntu 版本代號 (例如 jammy, focal)
-#   # 並將對應的 ddebs repository 設定檔寫入 /etc/apt/sources.list.d/
-#   codename=$(lsb_release -cs)
-#   sudo tee /etc/apt/sources.list.d/ddebs.list << EOF
-#   deb http://ddebs.ubuntu.com/ ${codename} main restricted universe multiverse
-#   deb http://ddebs.ubuntu.com/ ${codename}-updates main restricted universe multiverse
-#   deb http://ddebs.ubuntu.com/ ${codename}-proposed main restricted universe multiverse
-#   EOF
-#
-#   # 下載金鑰並加入到 apt 的信任清單中
-#   sudo apt-get install wget -y
-#   wget -O - http://ddebs.ubuntu.com/dbgsym-release-key.asc | sudo apt-key add -
-#
-#   sudo apt-get update
-#
-#   # 安裝對應核心版本的 debug symbol
-#   sudo apt-get install linux-image-$(uname -r)-dbgsym
+# 修改重點 (v2.3):
+# - 恢復 PERF_EVENTS 中遺漏的 cpu-clock, task-clock, L1-dcache-loads, LLC-loads。
+# - 藉由補全 Event，讓 perf stat 報告能重新顯示詳細比例 (如 cache miss rate, CPU utilization)。
 #
 # 用法:
 # ./scripts/performance_test_detailed_example.sh [affinity_mode] [core_a] [core_b]
-#
-# 範例 (由 run_with_cpu_shield.sh 呼叫):
-# (sudo ./scripts/run_with_cpu_shield.sh "6,7" ./scripts/performance_test_detailed_example.sh rt-cross-core 6 7)
 # ==============================================================================
 
-# --- Configuration ---
+# --- 0. 環境與安全設定 ---
+export LC_NUMERIC=C
 export FLAMEGRAPH_DIR="/home/kjmse716/Documents/Labs/POSIX-concurrency-lab/library/FlameGraph"
 
-NUM_RUNS=1 
+# 參數設定
+NUM_RUNS=1
 REST_INTERVAL_S=0.1
 PRODUCT_COUNTS=(1000000)
-BUFFER_SIZES=({1..100}) # Added buffer size test cases
-MESSAGE_LENS=(64)      # Added message length test cases
-
+BUFFER_SIZES=(1 20)
+MESSAGE_LENS=(64)
 PROFILING_MIN_PRODUCT_COUNT=1000
 
-# Source code paths
+# 關鍵指標 (已補全以支援詳細 Ratio 計算)
+PERF_EVENTS="cpu-clock,task-clock,context-switches,cpu-migrations,page-faults,L1-dcache-loads,L1-dcache-load-misses,L1-dcache-store-misses,cache-misses,LLC-loads,LLC-load-misses,LLC-store-misses"
+
+# 路徑設定
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 PROJECT_ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-
-# (假設路徑正確)
 V4_SRC_DIR="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc"
+
+# 原始碼
 THREAD_SRC="${V4_SRC_DIR}/itc_producer_consumer.c"
 PROCESS_PRODUCER_SRC="${V4_SRC_DIR}/ipc_producer.c"
 PROCESS_CONSUMER_SRC="${V4_SRC_DIR}/ipc_consumer.c"
 
-# Compiled executable names
+# 執行檔
 THREAD_EXE="${SCRIPT_DIR}/temp_thread_test"
 PROCESS_PRODUCER_EXE="${V4_SRC_DIR}/ipc_producer"
 PROCESS_CONSUMER_EXE="${V4_SRC_DIR}/ipc_consumer"
 
-# FlameGraph script paths
+# FlameGraph
 STACKCOLLAPSE_SCRIPT="${FLAMEGRAPH_DIR}/stackcollapse-perf.pl"
 FLAMEGRAPH_SCRIPT="${FLAMEGRAPH_DIR}/flamegraph.pl"
 
-
-# --- 1. Affinity 參數解析 ---
+# --- 1. Affinity 解析 ---
 AFFINITY_MODE="$1"
 CORE_A="$2"
 CORE_B="$3"
 
-PRODUCER_CMD_PREFIX=""
-CONSUMER_CMD_PREFIX=""
-THREAD_CMD_PREFIX=""
-THREAD_COMPILE_FLAGS="" # C 語言編譯旗標
+if [ -z "$AFFINITY_MODE" ]; then AFFINITY_MODE="unlimited"; fi
 
-# 預設為 unlimited
-if [ -z "$AFFINITY_MODE" ]; then
-    AFFINITY_MODE="unlimited"
-fi
-
-# Output directory
 RESULTS_DIR="${SCRIPT_DIR}/results_detailed_${AFFINITY_MODE}"
-TIMING_CSV_FILE="${RESULTS_DIR}/timing_results.csv"
+TIMING_CSV_FILE="${RESULTS_DIR}/timing_and_metrics.csv"
 
 echo "===================================================="
-echo ">> 正在以模式運行: ${AFFINITY_MODE}"
-echo ">> 結果將儲存至: ${RESULTS_DIR}"
+echo ">> 模式: ${AFFINITY_MODE}"
+echo ">> 結果目錄: ${RESULTS_DIR}"
 echo "===================================================="
 
 case "$AFFINITY_MODE" in
     "rt-single-core")
-        echo "   - 綁定: Real-Time 單一核心 (Core ${CORE_A})"
         THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_A}"
         ;;
     "rt-cross-core")
-        echo "   - 綁定: Real-Time 跨核心 (P:${CORE_A}, C:${CORE_B})"
-        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A},${CORE_B}" 
+        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A},${CORE_B}"
         PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_B}"
         THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_B}"
         ;;
     "unlimited")
-        echo "   - 綁定: 不限制 (unlimited)"
+        THREAD_CMD_PREFIX=""
+        PRODUCER_CMD_PREFIX=""
+        CONSUMER_CMD_PREFIX=""
+        THREAD_COMPILE_FLAGS=""
         ;;
     *)
         echo "錯誤: 不支援的模式 '$AFFINITY_MODE'"
         exit 1
         ;;
 esac
-echo "----------------------------------------------------"
 
-
-# --- Pre-run Checks ---
-if [[ $EUID -ne 0 ]]; then
-    echo "!! 這個腳本需要 root 權限 (使用 sudo) 才能執行 perf。"
-    exit 1
-fi
+# --- Checks ---
+if [[ $EUID -ne 0 ]]; then echo "!! 需要 root 權限。"; exit 1; fi
 AUTO_FLAMEGRAPH=true
-if [ ! -f "$STACKCOLLAPSE_SCRIPT" ] || [ ! -f "$FLAMEGRAPH_SCRIPT" ]; then
-     echo "!! 錯誤：找不到 FlameGraph 工具。"
-     AUTO_FLAMEGRAPH=false
-fi
+if [ ! -f "$STACKCOLLAPSE_SCRIPT" ]; then AUTO_FLAMEGRAPH=false; fi
 mkdir -p "$RESULTS_DIR"
 
-# --- Initialization ---
 cleanup() {
-    echo ">> 清理暫存檔案..."
     rm -f "$THREAD_EXE" "$PROCESS_PRODUCER_EXE" "$PROCESS_CONSUMER_EXE"
-    # (移除 make clean，因為我們不再依賴 v4 src dir 中的 Makefile)
 }
-trap cleanup EXIT 
-cleanup 
+trap cleanup EXIT
+cleanup
 
-echo "TestType,ProductCount,BufferSize,MessageLen,AvgInitTime_s,AvgCommTime_s" > "$TIMING_CSV_FILE"
+# --- CSV Header ---
+echo "TestType,ProductCount,BufferSize,MessageLen,AvgInitTime,AvgCommTime,L1_dcache_load_misses,L1_dcache_store_misses,LLC_load_misses,LLC_store_misses,Context_Switches,Futex_Calls" > "$TIMING_CSV_FILE"
 
-# --- Main Test Loop ---
-echo "####################################################"
-echo "# 開始綜合效能測試                               #"
-echo "####################################################"
+# --- Helpers (安全增強版) ---
 
+extract_perf_val() {
+    local event="$1"
+    local file="$2"
+    # 1. 取第一欄 2. 刪除逗號
+    local val=$(grep "$event" "$file" | awk '{print $1}' | sed 's/,//g')
+    
+    # 【安全修正】確保 val 是純數字。如果抓到 "<not" (supported) 或空值，回傳 0
+    if [[ ! "$val" =~ ^[0-9]+$ ]]; then
+        echo "0"
+    else
+        echo "$val"
+    fi
+}
+
+extract_strace_futex() {
+    local file="$1"
+    # 【安全修正】加總所有包含 futex 的行 (避免多行導致變數含換行符號)
+    local val=$(grep "futex" "$file" | awk '{sum+=$4} END {print sum}')
+    
+    if [ -z "$val" ]; then echo "0"; else echo "$val"; fi
+}
+
+# --- Main Loop ---
 for bsize in "${BUFFER_SIZES[@]}"; do
     for pcount in "${PRODUCT_COUNTS[@]}"; do
         for mlen in "${MESSAGE_LENS[@]}"; do
             TEST_CASE_TAG="P${pcount}_B${bsize}_M${mlen}"
-            STRACE_IPC_EVENTS="trace=futex,mmap,openat"
-            STRACE_ITC_EVENTS="trace=futex,clone"
-            PERF_EVENTS="context-switches,cpu-migrations,page-faults,cpu-clock,task-clock"
+            echo ">> [${bsize} Buffer] 測試開始..."
 
-            echo "----------------------------------------------------"
-            echo ">> 測試設定：ProductCount=${pcount}, BufferSize=${bsize}, MessageLen=${mlen}"
-            echo "----------------------------------------------------"
-
-            # ==================== ITC (Thread) Model Test ====================
-            echo "   [1/2] 測試 ITC (執行緒) 模型..."
+            # ==================== ITC (Thread) ====================
             MODEL_TYPE="ITC"
             OUTPUT_PREFIX="${RESULTS_DIR}/${MODEL_TYPE}_${TEST_CASE_TAG}"
-            PERF_DATA_FILE="${OUTPUT_PREFIX}_perf.data"
-            FLAMEGRAPH_SVG_FILE="${OUTPUT_PREFIX}_flamegraph.svg"
-            PERF_REPORT_FILE="${OUTPUT_PREFIX}_perf_report.txt"
-            PERF_REPORT_FLAT_FILE="${OUTPUT_PREFIX}_perf_report_flat.txt"
 
-            echo "       - 編譯 ITC 原始碼 (帶有除錯資訊)..."
+            # 1. 編譯
             gcc "$THREAD_SRC" -o "$THREAD_EXE" -g -DNUM_PRODUCTS="$pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" ${THREAD_COMPILE_FLAGS} -lpthread -lrt
-            if [ $? -ne 0 ]; then echo "       !! ITC 編譯失敗。"; continue; fi
+            if [ $? -ne 0 ]; then echo "!! ITC 編譯失敗"; continue; fi
 
-            echo "       - 執行基本計時測試 (${NUM_RUNS} 次)..."
-            result=$( ${THREAD_CMD_PREFIX} "$THREAD_EXE" ); init_time=$(echo "$result" | cut -d',' -f1); comm_time=$(echo "$result" | cut -d',' -f2)
-            echo "${MODEL_TYPE},${pcount},${bsize},${mlen},${init_time},${comm_time}" >> "$TIMING_CSV_FILE"
-            echo "         平均 Init: ${init_time}s, Comm: ${comm_time}s"
+            # 2. Phase 1: 計時
+            total_init=0.0; total_comm=0.0
+            for j in $(seq 1 ${NUM_RUNS}); do
+                result=$( ${THREAD_CMD_PREFIX} "$THREAD_EXE" )
+                i_time=$(echo "$result" | cut -d',' -f1); c_time=$(echo "$result" | cut -d',' -f2)
+                total_init=$(awk -v t1="$total_init" -v t2="$i_time" 'BEGIN{print t1+t2}')
+                total_comm=$(awk -v t1="$total_comm" -v t2="$c_time" 'BEGIN{print t1+t2}')
+                sleep ${REST_INTERVAL_S}
+            done
+            avg_init=$(awk -v t="$total_init" -v n="$NUM_RUNS" 'BEGIN{print t/n}')
+            avg_comm=$(awk -v t="$total_comm" -v n="$NUM_RUNS" 'BEGIN{print t/n}')
 
-            echo "       - 執行 strace 和 perf stat..."
-            strace -T -c -f -e "$STRACE_ITC_EVENTS" ${THREAD_CMD_PREFIX} "$THREAD_EXE" > "${OUTPUT_PREFIX}_strace_summary.txt" 2>&1
-            perf stat -d -e "$PERF_EVENTS" ${THREAD_CMD_PREFIX} "$THREAD_EXE" > "${OUTPUT_PREFIX}_perf_stat.txt" 2>&1
+            # 3. Phase 2: Perf & Strace
+            perf stat -e "$PERF_EVENTS" -o "${OUTPUT_PREFIX}_perf_stat.txt" \
+                ${THREAD_CMD_PREFIX} "$THREAD_EXE" > /dev/null 2>&1
+            
+            strace -c -f -e trace=futex -o "${OUTPUT_PREFIX}_strace_summary.txt" \
+                ${THREAD_CMD_PREFIX} "$THREAD_EXE" > /dev/null 2>&1
 
+            # 4. 寫入 CSV (使用安全增強版的 helpers)
+            p_l1_load=$(extract_perf_val "L1-dcache-load-misses" "${OUTPUT_PREFIX}_perf_stat.txt")
+            p_l1_store=$(extract_perf_val "L1-dcache-store-misses" "${OUTPUT_PREFIX}_perf_stat.txt")
+            p_llc_load=$(extract_perf_val "LLC-load-misses" "${OUTPUT_PREFIX}_perf_stat.txt")
+            p_llc_store=$(extract_perf_val "LLC-store-misses" "${OUTPUT_PREFIX}_perf_stat.txt")
+            p_csw=$(extract_perf_val "context-switches" "${OUTPUT_PREFIX}_perf_stat.txt")
+            s_futex=$(extract_strace_futex "${OUTPUT_PREFIX}_strace_summary.txt")
+            echo "${MODEL_TYPE},${pcount},${bsize},${mlen},${avg_init},${avg_comm},${p_l1_load},${p_l1_store},${p_llc_load},${p_llc_store},${p_csw},${s_futex}" >> "$TIMING_CSV_FILE"
+
+            # 5. Phase 3: Profiling
             perf_pcount=$pcount
             if (( pcount < PROFILING_MIN_PRODUCT_COUNT )); then
                 perf_pcount=$PROFILING_MIN_PRODUCT_COUNT
-                echo "       - 為了 profiling，使用更大的工作負載 (${perf_pcount}) 重新編譯..."
                 gcc "$THREAD_SRC" -o "$THREAD_EXE" -g -DNUM_PRODUCTS="$perf_pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" ${THREAD_COMPILE_FLAGS} -lpthread -lrt
+                if [ $? -ne 0 ]; then echo "!! ITC Profiling 編譯失敗"; continue; fi
             fi
-
-            echo "       - 執行 perf record..."
-            perf record -m 1024 -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- ${THREAD_CMD_PREFIX} "$THREAD_EXE" > /dev/null 2>&1
-
-            if [ -s "$PERF_DATA_FILE" ]; then
-                echo "       - 生成 perf report 文字報告 (標準 & 平坦)..."
-                perf report --stdio -i "$PERF_DATA_FILE" > "$PERF_REPORT_FILE"
-                perf report --stdio --no-children -i "$PERF_DATA_FILE" > "$PERF_REPORT_FLAT_FILE"
-                if [ "$AUTO_FLAMEGRAPH" = true ]; then
-                    echo "       - 生成火焰圖..."
-                    perf script -i "$PERF_DATA_FILE" | "$STACKCOLLAPSE_SCRIPT" | "$FLAMEGRAPH_SCRIPT" > "$FLAMEGRAPH_SVG_FILE"
-                fi
-            else
-                echo "       !! Perf record 未能採集到足夠數據，跳過報告和火焰圖生成。"
-            fi
-            echo "   ... ITC 測試完成。"
             
-            # ==================== IPC (Process) Model Test ===================
-            echo "   [2/2] 測試 IPC (行程) 模型..."
+            perf record -m 1024 -F 99 --call-graph dwarf -g -o "${OUTPUT_PREFIX}_perf.data" -- ${THREAD_CMD_PREFIX} "$THREAD_EXE" > /dev/null 2>&1
+            
+            if [ -s "${OUTPUT_PREFIX}_perf.data" ]; then
+                perf report --stdio -i "${OUTPUT_PREFIX}_perf.data" > "${OUTPUT_PREFIX}_perf_report.txt" 2>/dev/null
+                perf report --stdio --no-children -i "${OUTPUT_PREFIX}_perf.data" > "${OUTPUT_PREFIX}_perf_report_flat.txt" 2>/dev/null
+                if [ "$AUTO_FLAMEGRAPH" = true ]; then
+                    perf script -i "${OUTPUT_PREFIX}_perf.data" | "$STACKCOLLAPSE_SCRIPT" | "$FLAMEGRAPH_SCRIPT" > "${OUTPUT_PREFIX}_flamegraph.svg"
+                fi
+            fi
+
+            # ==================== IPC (Process) ====================
             MODEL_TYPE="IPC"
             OUTPUT_PREFIX="${RESULTS_DIR}/${MODEL_TYPE}_${TEST_CASE_TAG}"
-            PERF_DATA_FILE="${OUTPUT_PREFIX}_perf.data"
-            FLAMEGRAPH_SVG_FILE="${OUTPUT_PREFIX}_flamegraph.svg"
-            PERF_REPORT_FILE="${OUTPUT_PREFIX}_perf_report.txt"
-            PERF_REPORT_FLAT_FILE="${OUTPUT_PREFIX}_perf_report_flat.txt"
 
-            echo "       - 編譯 IPC 原始碼 (帶有除錯資訊)..."
-            # 【修復】: 從 make 改為直接使用 gcc
+            # 1. 編譯
             gcc "${PROCESS_PRODUCER_SRC}" -o ${PROCESS_PRODUCER_EXE} -g -DNUM_PRODUCTS="$pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
             gcc "${PROCESS_CONSUMER_SRC}" -o ${PROCESS_CONSUMER_EXE} -g -DNUM_PRODUCTS="$pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
-            
-            if [ $? -ne 0 ]; then
-                echo "       !! IPC 編譯失敗。"; continue;
-            fi
-            
-            echo "       - 執行基本計時測試 (${NUM_RUNS} 次)..."
-            # 【修改】: 手動啟動 consumer & producer
-            ${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} &
-            CONSUMER_PID=$!
-            result=$( ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE} 2>/dev/null | grep '^[0-9\.]\+,[0-9\.]\+$' )
-            wait $CONSUMER_PID
-            
-            init_time=$(echo "$result" | cut -d',' -f1); comm_time=$(echo "$result" | cut -d',' -f2)
-            echo "${MODEL_TYPE},${pcount},${bsize},${mlen},${init_time},${comm_time}" >> "$TIMING_CSV_FILE"
-            echo "         平均 Init: ${init_time}s, Comm: ${comm_time}s"
-            
-            echo "       - 執行 strace 和 perf stat..."
-            # 【修改】: 使用 bash -c "cmd1 & cmd2; wait" 來包裝兩個行程
-            strace -T -c -f -e "$STRACE_IPC_EVENTS" -o "${OUTPUT_PREFIX}_strace_summary.txt" \
-                bash -c "${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} & ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE}; wait" > /dev/null 2>&1
+            if [ $? -ne 0 ]; then echo "!! IPC 編譯失敗"; continue; fi
+
+            # 2. Phase 1: 計時
+            total_init=0.0; total_comm=0.0
+            for j in $(seq 1 ${NUM_RUNS}); do
+                ${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} &
+                consumer_pid=$!
+                result=$( ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE} )
+                wait $consumer_pid
                 
-            perf stat -d -e "$PERF_EVENTS" -o "${OUTPUT_PREFIX}_perf_stat.txt" \
+                i_time=$(echo "$result" | cut -d',' -f1); c_time=$(echo "$result" | cut -d',' -f2)
+                total_init=$(awk -v t1="$total_init" -v t2="$i_time" 'BEGIN{print t1+t2}')
+                total_comm=$(awk -v t1="$total_comm" -v t2="$c_time" 'BEGIN{print t1+t2}')
+                sleep ${REST_INTERVAL_S}
+            done
+            avg_init=$(awk -v t="$total_init" -v n="$NUM_RUNS" 'BEGIN{print t/n}')
+            avg_comm=$(awk -v t="$total_comm" -v n="$NUM_RUNS" 'BEGIN{print t/n}')
+
+            # 3. Phase 2: Perf & Strace
+            perf stat -e "$PERF_EVENTS" -o "${OUTPUT_PREFIX}_perf_stat.txt" \
+                bash -c "${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} & ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE}; wait" > /dev/null 2>&1
+            
+            strace -c -f -e trace=futex -o "${OUTPUT_PREFIX}_strace_summary.txt" \
                 bash -c "${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} & ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE}; wait" > /dev/null 2>&1
 
+            # 4. 寫入 CSV
+            p_l1_load=$(extract_perf_val "L1-dcache-load-misses" "${OUTPUT_PREFIX}_perf_stat.txt")
+            p_l1_store=$(extract_perf_val "L1-dcache-store-misses" "${OUTPUT_PREFIX}_perf_stat.txt")
+            p_llc_load=$(extract_perf_val "LLC-load-misses" "${OUTPUT_PREFIX}_perf_stat.txt")
+            p_llc_store=$(extract_perf_val "LLC-store-misses" "${OUTPUT_PREFIX}_perf_stat.txt")
+            p_csw=$(extract_perf_val "context-switches" "${OUTPUT_PREFIX}_perf_stat.txt")
+            s_futex=$(extract_strace_futex "${OUTPUT_PREFIX}_strace_summary.txt")
+            echo "${MODEL_TYPE},${pcount},${bsize},${mlen},${avg_init},${avg_comm},${p_l1_load},${p_l1_store},${p_llc_load},${p_llc_store},${p_csw},${s_futex}" >> "$TIMING_CSV_FILE"
+
+            # 5. Phase 3: Profiling
             perf_pcount=$pcount
             if (( pcount < PROFILING_MIN_PRODUCT_COUNT )); then
-                perf_pcount=$PROFILING_MIN_PRODUCT_COUNT
-                echo "       - 為了 profiling，使用更大的工作負載 (${perf_pcount}) 重新編譯..."
-                # 【修復】: 同樣，直接使用 gcc
-                gcc "${PROCESS_PRODUCER_SRC}" -o ${PROCESS_PRODUCER_EXE} -g -DNUM_PRODUCTS="$perf_pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
-                gcc "${PROCESS_CONSUMER_SRC}" -o ${PROCESS_CONSUMER_EXE} -g -DNUM_PRODUCTS="$perf_pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
+                 perf_pcount=$PROFILING_MIN_PRODUCT_COUNT
+                 gcc "${PROCESS_PRODUCER_SRC}" -o ${PROCESS_PRODUCER_EXE} -g -DNUM_PRODUCTS="$perf_pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
+                 gcc "${PROCESS_CONSUMER_SRC}" -o ${PROCESS_CONSUMER_EXE} -g -DNUM_PRODUCTS="$perf_pcount" -DBUFFER_SIZE="$bsize" -DMAX_MESSAGE_LEN="$mlen" -lpthread -lrt
+                 if [ $? -ne 0 ]; then echo "!! IPC Profiling 編譯失敗"; continue; fi
             fi
-
-            echo "       - 執行 perf record..."
-            # 【修改】: 同樣使用 bash -c "..." 技巧
-            perf record -m 1024 -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- \
+            
+            perf record -m 1024 -F 99 --call-graph dwarf -g -o "${OUTPUT_PREFIX}_perf.data" -- \
                 bash -c "${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} & ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE}; wait" > /dev/null 2>&1
             
-            if [ -s "$PERF_DATA_FILE" ]; then
-                echo "       - 生成 perf report 文字報告 (標準 & 平坦)..."
-                perf report --stdio -i "$PERF_DATA_FILE" > "$PERF_REPORT_FILE"
-                perf report --stdio --no-children -i "$PERF_DATA_FILE" > "$PERF_REPORT_FLAT_FILE"
-
+            if [ -s "${OUTPUT_PREFIX}_perf.data" ]; then
+                perf report --stdio -i "${OUTPUT_PREFIX}_perf.data" > "${OUTPUT_PREFIX}_perf_report.txt" 2>/dev/null
+                perf report --stdio --no-children -i "${OUTPUT_PREFIX}_perf.data" > "${OUTPUT_PREFIX}_perf_report_flat.txt" 2>/dev/null
                 if [ "$AUTO_FLAMEGRAPH" = true ]; then
-                    echo "       - 生成火焰圖..."
-                    perf script -i "$PERF_DATA_FILE" | "$STACKCOLLAPSE_SCRIPT" | "$FLAMEGRAPH_SCRIPT" > "$FLAMEGRAPH_SVG_FILE"
+                    perf script -i "${OUTPUT_PREFIX}_perf.data" | "$STACKCOLLAPSE_SCRIPT" | "$FLAMEGRAPH_SCRIPT" > "${OUTPUT_PREFIX}_flamegraph.svg"
                 fi
-            else
-                 echo "       !! Perf record 未能採集到足夠數據，跳過報告和火焰圖生成。"
             fi
-            
-            echo "   ... IPC 測試完成。"
-
         done
     done
 done
 
 echo "####################################################"
-echo "# 測試完成                                       #"
+echo "# 測試完成"
+echo ">> CSV 報告: ${TIMING_CSV_FILE}"
 echo "####################################################"
-echo ">> 計時結果儲存於： ${TIMING_CSV_FILE}"
-echo ">> Strace, Perf Stat, Perf Report (標準 & 平坦 .txt), Perf Data (.data), 和火焰圖 (.svg) 儲存於： ${RESULTS_DIR}"
-
-exit 0

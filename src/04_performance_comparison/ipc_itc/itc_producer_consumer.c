@@ -9,7 +9,7 @@
 #include <semaphore.h> // for time measurement (wait until threads are ready).
 #include <time.h> 
 #include <stdint.h>
-
+#include <stdalign.h>
 
 #ifdef DEBUG
     #define LOG(msg, ...) printf(msg, ##__VA_ARGS__);
@@ -42,8 +42,8 @@ typedef struct {
     
     // --- Circular buffer ---
     int message_ready;
-    char message[BUFFER_SIZE][MAX_MESSAGE_LEN];
     int curr_producer, curr_consumer;
+    alignas(64) char message[BUFFER_SIZE][MAX_MESSAGE_LEN];
 
     /* --- For time measurement --- */
     sem_t ready_sem; 
