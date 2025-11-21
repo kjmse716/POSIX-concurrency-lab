@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # ==============================================================================
-# Off-CPU Flame Graph 生成腳本 (v5.1 - Affinity-Aware & Fixed)
+# Off-CPU Flame Graph 生成腳本 (v5.2 - Full Affinity-Aware)
 #
 # 用法:
 # ./scripts/performance_test_offcpu_example.sh [affinity_mode] [core_a] [core_b]
@@ -35,7 +35,7 @@ CORE_B="$3"
 PRODUCER_CMD_PREFIX=""
 CONSUMER_CMD_PREFIX=""
 THREAD_CMD_PREFIX=""
-THREAD_COMPILE_FLAGS="" # C 語言編譯旗標
+AFFINITY_COMPILE_FLAGS="" # [修改] 改名為通用編譯旗標
 
 # 預設為 unlimited
 if [ -z "$AFFINITY_MODE" ]; then
@@ -46,7 +46,7 @@ RESULTS_DIR="${SCRIPT_DIR}/off_cpu_results_${AFFINITY_MODE}"
 mkdir -p "$RESULTS_DIR"
 
 echo "===================================================="
-echo " Off-CPU Flame Graph 生成腳本 (v5.1)"
+echo " Off-CPU Flame Graph 生成腳本 (v5.2)"
 echo ">> 正在以模式運行: ${AFFINITY_MODE}"
 echo "===================================================="
 
@@ -56,17 +56,20 @@ case "$AFFINITY_MODE" in
         THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
-        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_A}"
+        # [修改] 設定 C 語言層級綁核巨集
+        AFFINITY_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_A}"
         ;;
     "rt-cross-core")
         echo "   - 綁定: Real-Time 跨核心 (P:${CORE_A}, C:${CORE_B})"
         THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A},${CORE_B}" 
         PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_B}"
-        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_B}"
+        # [修改] 設定 C 語言層級綁核巨集
+        AFFINITY_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_B}"
         ;;
     "unlimited")
         echo "   - 綁定: 不限制 (unlimited)"
+        AFFINITY_COMPILE_FLAGS=""
         ;;
     *)
         echo "錯誤: 不支援的模式 '$AFFINITY_MODE'"
@@ -80,6 +83,9 @@ echo " - Product Count: ${PRODUCT_COUNT}"
 echo " - Buffer Size: ${BUFFER_SIZE}"
 echo " - Message Len: ${MESSAGE_LEN}"
 echo "結果將儲存於: ${RESULTS_DIR}"
+if [[ -n "$AFFINITY_COMPILE_FLAGS" ]]; then
+    echo " - C 語言綁核旗標: ${AFFINITY_COMPILE_FLAGS}"
+fi
 echo "----------------------------------------------------"
 
 # --- 前置檢查 ---
@@ -105,8 +111,9 @@ trap cleanup EXIT
 # -----------------------------------------------------------------------------
 
 echo ">> [1/2] 正在分析 ITC (執行緒) 模型..."
+# [修改] 使用 AFFINITY_COMPILE_FLAGS
 gcc -g "${THREAD_SRC}" -o "${THREAD_EXE_PATH}" \
-${THREAD_COMPILE_FLAGS} \
+${AFFINITY_COMPILE_FLAGS} \
 -DNUM_PRODUCTS=${PRODUCT_COUNT} \
 -DBUFFER_SIZE=${BUFFER_SIZE} \
 -DMAX_MESSAGE_LEN=${MESSAGE_LEN} \
@@ -143,17 +150,21 @@ echo "----------------------------------------------------"
 
 echo ">> [2/2] 正在分析 IPC (行程) 模型..."
 
-# 【修復】: IPC (v4) 原始碼不使用 make, 必須直接使用 gcc 編譯
+# IPC (v4) 原始碼不使用 make, 必須直接使用 gcc 編譯
 IPC_PRODUCER_EXE="${IPC_APP_DIR}/ipc_producer"
 IPC_CONSUMER_EXE="${IPC_APP_DIR}/ipc_consumer"
 
+# [修改] 加入 AFFINITY_COMPILE_FLAGS
 gcc -g "${IPC_APP_DIR}/ipc_producer.c" -o "${IPC_PRODUCER_EXE}" \
+    ${AFFINITY_COMPILE_FLAGS} \
     -DNUM_PRODUCTS=${PRODUCT_COUNT} \
     -DBUFFER_SIZE=${BUFFER_SIZE} \
     -DMAX_MESSAGE_LEN=${MESSAGE_LEN} \
     -lpthread -lrt
 
+# [修改] 加入 AFFINITY_COMPILE_FLAGS
 gcc -g "${IPC_APP_DIR}/ipc_consumer.c" -o "${IPC_CONSUMER_EXE}" \
+    ${AFFINITY_COMPILE_FLAGS} \
     -DNUM_PRODUCTS=${PRODUCT_COUNT} \
     -DBUFFER_SIZE=${BUFFER_SIZE} \
     -DMAX_MESSAGE_LEN=${MESSAGE_LEN} \
@@ -166,7 +177,6 @@ fi
 
 
 echo " - 使用 perf record 進行 Off-CPU 時間採樣 (IPC)..."
-# 【修改】: 不再使用 IPC_RUN_SCRIPT，改用 bash -c "..."
 sudo perf record -e sched:sched_switch -a --call-graph dwarf -- \
     bash -c "${CONSUMER_CMD_PREFIX} ${IPC_CONSUMER_EXE} & ${PRODUCER_CMD_PREFIX} ${IPC_PRODUCER_EXE}; wait" > /dev/null 2>&1
 
@@ -178,7 +188,8 @@ IPC_TXT="${RESULTS_DIR}/perf.ipc.txt"
 IPC_FOLDED="${RESULTS_DIR}/perf.ipc.folded"
 IPC_SVG="${RESULTS_DIR}/ipc_offcpu_flamegraph.svg"
 
-sudo perf script > "$ITC_TXT" 2>/dev/null
+
+sudo perf script > "$IPC_TXT" 2>/dev/null
 "${FLAMEGRAPH_DIR}/stackcollapse-perf.pl" "$IPC_TXT" > "$IPC_FOLDED" 2>/dev/null || true
 
 if [ ! -s "$IPC_FOLDED" ]; then

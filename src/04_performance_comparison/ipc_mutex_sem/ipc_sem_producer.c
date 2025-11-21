@@ -9,7 +9,7 @@
 #include <pthread.h>
 #include <sched.h>     // [新增] 為了 cpu_set_t
 #include <semaphore.h>
-#include "ipc_common.h"
+#include "ipc_sem_common.h"
 #include <time.h> // Measure time
 #include <string.h> // for memcpy
 
@@ -19,10 +19,13 @@ static char template_message[MAX_MESSAGE_LEN];
  * @brief [新增] 將當前 process/thread 綁定到指定的 CPU 核心
  */
 void pin_thread_to_core(int core_id) {
-    cpu_set_t cpuset;
-    CPU_ZERO(&cpuset);
-    CPU_SET(core_id, &cpuset);
-    pthread_t current_thread = pthread_self();
+    cpu_set_t cpuset;       // CPU 核心的集合
+    CPU_ZERO(&cpuset);      // 清空集合
+    CPU_SET(core_id, &cpuset); // 將指定的核心 ID 加入集合
+
+    pthread_t current_thread = pthread_self(); // 獲取當前的 thread ID
+    
+    // 設置 CPU 親和性
     if (pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset) != 0) {
         perror("pthread_setaffinity_np failed");
     } else {
@@ -31,19 +34,16 @@ void pin_thread_to_core(int core_id) {
 }
 
 void producer(shared_data *data_ptr){
-
     for(int i = 0;i<NUM_PRODUCTS;i++){
-        // protect read/write critical region
-        if(pthread_mutex_lock(&data_ptr->mutex) != 0){
-            perror("producer mutex_lock failed.");
+        // look for a space.
+        if(sem_wait(&data_ptr->space) == -1){
+            perror("sem_wait(&data_ptr->space).");
             break;
         }
-
-        // wait for a space.
-        while (data_ptr->message_ready >= BUFFER_SIZE) {
-            if (pthread_cond_wait(&data_ptr->space_cond, &data_ptr->mutex) != 0) {
-                perror("producer cond_wait space fail.");
-            }
+        // protect read/write critical region
+        if(sem_wait(&data_ptr->semaphore) == -1){
+            perror("sem_wait(&data_ptr->semaphore).");
+            break;
         }
         
         // write data into shared memory
@@ -54,15 +54,14 @@ void producer(shared_data *data_ptr){
         #endif
 
         data_ptr->curr_producer = (data_ptr->curr_producer + 1) % BUFFER_SIZE;
-        data_ptr->message_ready += 1;
 
-        if(pthread_cond_signal(&data_ptr->product_cond) != 0){
-            perror("producer cond signal failed.");
+        if(sem_post(&data_ptr->semaphore) == -1){
+            perror("sem_post(&data_ptr->semaphore)");
             break;
         }
-        
-        if(pthread_mutex_unlock(&data_ptr->mutex) != 0){
-            perror("producer mutex_unlock failed.");
+
+        if(sem_post(&data_ptr->product) == -1){
+            perror("sem_post(&data_ptr->product)");
             break;
         }
     }    
@@ -76,16 +75,16 @@ double get_elapsed_seconds(struct timespec start, struct timespec end) {
 
 int main()
 {
-    // [新增] CPU Affinity Binding
+    // [新增] CPU Affinity Binding (在任何初始化之前設定)
     #ifdef PRODUCER_CORE_ID
         pin_thread_to_core(PRODUCER_CORE_ID);
     #endif
 
-    // create the template message for each product_cond
+    // create the template message for each product
     memset(template_message, 'A', MAX_MESSAGE_LEN);
     template_message[MAX_MESSAGE_LEN - 1] = '\0';
 
-    // named mutex for initialization check.
+    // named semaphore for initialization check.
     sem_t* ready = sem_open(READY_SEMAPHORE, O_CREAT, 0600, 0);
     if(ready == SEM_FAILED){
         perror("sem_open() failed.");
@@ -131,9 +130,9 @@ int main()
     data_ptr->curr_producer = 0;
     data_ptr->curr_consumer = 0;
 
-    data_ptr->message_ready = 0;  // no product at start.
 
     // --- Init semaphores for time measurement ---
+    // pshared mode 1:shared between process, initial value 0.
     if( sem_init(&data_ptr->consumer_ready, 1, 0)== -1||
         sem_init(&data_ptr->start_gun_sem, 1, 0)== -1||
         sem_init(&data_ptr->complete, 1, 0)== -1){
@@ -141,34 +140,23 @@ int main()
         return EXIT_FAILURE;
     }
 
-    
-    // --- Initialize mutex ---
-    pthread_mutexattr_t mattr;
-    pthread_condattr_t cattr;
 
-    pthread_mutexattr_init(&mattr);
-    pthread_mutexattr_setpshared(&mattr, PTHREAD_PROCESS_SHARED);
-
-    pthread_condattr_init(&cattr);
-    pthread_condattr_setpshared(&cattr, PTHREAD_PROCESS_SHARED);
-
-    if (pthread_mutex_init(&data_ptr->mutex, &mattr)!= 0 ||
-        pthread_cond_init(&data_ptr->product_cond, &cattr)!= 0 ||
-        pthread_cond_init(&data_ptr->space_cond, &cattr)!= 0) {
-        perror("init failed!!");
+    // --- Initialize semaphore ---
+    if(sem_init(&data_ptr->semaphore, 1, 1) == -1 ||
+       sem_init(&data_ptr->space, 1, BUFFER_SIZE) == -1 ||
+       sem_init(&data_ptr->product, 1, 0) == -1){
+        perror("sem_init failed.");
         return EXIT_FAILURE;
     }
-    pthread_mutexattr_destroy(&mattr);
-    pthread_condattr_destroy(&cattr);
 
-
-    LOG("mutex, cond init success.\n");
+    LOG("sem_init() success.\n");
     
-    // 通知 Consumer 初始化完成
+    // 通知 Consumer 我已經準備好初始化了 (但還沒開始計時)
     sem_post(ready);
     sem_close(ready);
     
-    // Wait for consumer (包含等待 Consumer 的綁核完成)
+    // Wait for consumer (to handle possible OS scheduling delays).
+    // 等待 Consumer 準備好 (包含 Consumer 的 CPU Pinning 完成)
     sem_wait(&data_ptr->consumer_ready);
 
     // start communication time measurement.
@@ -187,19 +175,18 @@ int main()
 
 
     sem_unlink(READY_SEMAPHORE);
-
-    // --- Destroy mutex and condition variables ---
-    if( pthread_mutex_destroy(&data_ptr->mutex) != 0||
-        pthread_cond_destroy(&data_ptr->space_cond) != 0 ||
-        pthread_cond_destroy(&data_ptr->product_cond) != 0){
-        perror("mutex, cond destroy failed.");
+    
+    if(sem_destroy(&data_ptr->semaphore) == -1||
+    sem_destroy(&data_ptr->space) == -1 ||
+    sem_destroy(&data_ptr->product) == -1 ||
+    sem_destroy(&data_ptr->complete) == -1){
+        perror("sem_destroy failed.");
         return EXIT_FAILURE;
     }
     
     // --- Destroy sem use for time measurement ---
     sem_destroy(&data_ptr->consumer_ready); 
-    sem_destroy(&data_ptr->start_gun_sem);
-    sem_destroy(&data_ptr->complete); 
+    sem_destroy(&data_ptr->start_gun_sem); 
 
 
     // unmap shared memory object from virtual memory.
@@ -208,6 +195,7 @@ int main()
         return EXIT_FAILURE;
     }
     LOG("munmap() success.\n");
+
     
     int r = shm_unlink(SHARE_MEMORY_NAME);
 
@@ -217,6 +205,7 @@ int main()
         return EXIT_FAILURE;
     } 
     LOG("shm_unlink() success.\n");
+
 
     // --- Show measurement result ---
     double initialize_time = get_elapsed_seconds(start_time, communication_start_time);

@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # =====================================================================
-# Comprehensive Performance Test Script (v4.1 - Affinity-Aware)
+# Comprehensive Performance Test Script (v4.2 - Full Affinity-Aware)
 # Objective:
 #   To conduct a rigorous, large-scale performance comparison between
 #   Inter-Process Communication (IPC) and Inter-Thread Communication (ITC)
@@ -16,6 +16,10 @@
 #
 #   The "AvgInitTime" is taken from the program's internal timer,
 #   representing the setup phase before the main communication loop.
+#
+# 修改重點 (v4.2):
+#   - 引入 AFFINITY_COMPILE_FLAGS。
+#   - 為 IPC (Process) 模型加入編譯旗標，支援 C 語言層級的 CPU 綁核。
 #
 # 用法:
 # ./scripts/performance_test_external_example.sh [affinity_mode] [core_a] [core_b]
@@ -55,7 +59,7 @@ CORE_B="$3"
 PRODUCER_CMD_PREFIX=""
 CONSUMER_CMD_PREFIX=""
 THREAD_CMD_PREFIX=""
-THREAD_COMPILE_FLAGS="" # C 語言編譯旗標
+AFFINITY_COMPILE_FLAGS="" # [修改] 改名為通用的編譯旗標
 
 # 預設為 unlimited
 if [ -z "$AFFINITY_MODE" ]; then
@@ -75,17 +79,20 @@ case "$AFFINITY_MODE" in
         THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
-        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_A}"
+        # [修改] 設定 C 語言層級綁核巨集
+        AFFINITY_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_A}"
         ;;
     "rt-cross-core")
         echo "   - 綁定: Real-Time 跨核心 (P:${CORE_A}, C:${CORE_B})"
         THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A},${CORE_B}" 
         PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_B}"
-        THREAD_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_B}"
+        # [修改] 設定 C 語言層級綁核巨集
+        AFFINITY_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_B}"
         ;;
     "unlimited")
         echo "   - 綁定: 不限制 (unlimited)"
+        AFFINITY_COMPILE_FLAGS=""
         ;;
     *)
         echo "錯誤: 不支援的模式 '$AFFINITY_MODE'"
@@ -93,6 +100,10 @@ case "$AFFINITY_MODE" in
         ;;
 esac
 echo "----------------------------------------------------"
+
+if [[ -n "$AFFINITY_COMPILE_FLAGS" ]]; then
+    echo ">> 已啟用 C 語言編譯旗標: ${AFFINITY_COMPILE_FLAGS}"
+fi
 
 
 # --- Pre-run Checks ---
@@ -113,8 +124,8 @@ for pcount in "${PRODUCT_COUNTS[@]}"; do
 
       # --- ITC (Thread) Model Test ---
       echo "  [1/2] Running ITC (Thread) Model..."
-      # 【修改】: 加入 ${THREAD_COMPILE_FLAGS}
-      gcc "${ITC_SRC}" -o ${ITC_EXE} ${THREAD_COMPILE_FLAGS} -DNUM_PRODUCTS=${pcount} -DBUFFER_SIZE=${bsize} -DMAX_MESSAGE_LEN=${mlen} -lpthread -lrt
+      # [修改] 使用 AFFINITY_COMPILE_FLAGS
+      gcc "${ITC_SRC}" -o ${ITC_EXE} ${AFFINITY_COMPILE_FLAGS} -DNUM_PRODUCTS=${pcount} -DBUFFER_SIZE=${bsize} -DMAX_MESSAGE_LEN=${mlen} -lpthread -lrt
       if [ $? -ne 0 ]; then
           echo "  !! ITC compilation failed. Skipping."
           continue
@@ -126,7 +137,7 @@ for pcount in "${PRODUCT_COUNTS[@]}"; do
           echo -ne "    - ITC Iteration ${j}/${NUM_RUNS}...\r"
           PERF_OUTPUT=$(mktemp)
           
-          # 【修改】: 加入 ${THREAD_CMD_PREFIX}
+          # 外部綁定 (taskset) 仍保留作為雙重保障
           INTERNAL_TIME=$(sudo perf stat -o ${PERF_OUTPUT} ${THREAD_CMD_PREFIX} ./${ITC_EXE})
           
           PERF_TIME=$(grep "seconds time elapsed" ${PERF_OUTPUT} | awk '{print $1}')
@@ -148,8 +159,11 @@ for pcount in "${PRODUCT_COUNTS[@]}"; do
 
       # --- IPC (Process) Model Test ---
       echo "  [2/2] Running IPC (Process) Model..."
-      gcc "${IPC_PRODUCER_SRC}" -o ${IPC_PRODUCER_EXE} -DNUM_PRODUCTS=${pcount} -DBUFFER_SIZE=${bsize} -DMAX_MESSAGE_LEN=${mlen} -lpthread -lrt
-      gcc "${IPC_CONSUMER_SRC}" -o ${IPC_CONSUMER_EXE} -DNUM_PRODUCTS=${pcount} -DBUFFER_SIZE=${bsize} -DMAX_MESSAGE_LEN=${mlen} -lpthread -lrt
+      
+      # [修改] 加入 AFFINITY_COMPILE_FLAGS 以支援 C 語言層級綁核
+      gcc "${IPC_PRODUCER_SRC}" -o ${IPC_PRODUCER_EXE} ${AFFINITY_COMPILE_FLAGS} -DNUM_PRODUCTS=${pcount} -DBUFFER_SIZE=${bsize} -DMAX_MESSAGE_LEN=${mlen} -lpthread -lrt
+      gcc "${IPC_CONSUMER_SRC}" -o ${IPC_CONSUMER_EXE} ${AFFINITY_COMPILE_FLAGS} -DNUM_PRODUCTS=${pcount} -DBUFFER_SIZE=${bsize} -DMAX_MESSAGE_LEN=${mlen} -lpthread -lrt
+      
       if [ $? -ne 0 ]; then
           echo "  !! IPC compilation failed. Skipping."
           continue
@@ -161,7 +175,7 @@ for pcount in "${PRODUCT_COUNTS[@]}"; do
           echo -ne "    - IPC Iteration ${j}/${NUM_RUNS}...\r"
           PERF_OUTPUT=$(mktemp)
 
-          # 【修改】: 手動分離 consumer 和 producer
+          # 手動分離 consumer 和 producer
           ${CONSUMER_CMD_PREFIX} ${IPC_CONSUMER_EXE} &
           CONSUMER_PID=$!
           

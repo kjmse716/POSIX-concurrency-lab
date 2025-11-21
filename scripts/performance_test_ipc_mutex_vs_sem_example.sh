@@ -1,62 +1,70 @@
 #!/bin/bash
 
 # =====================================================================
-# Performance Test Script (v1.2 - Fully Affinity-Aware)
+# Performance Test Script: IPC Mutex vs. IPC Semaphore
+# (Affinity-Aware Executor)
 #
-# 角色:
-# 這是一個「親和性感知的測試執行器」。
-# 它被設計為由一個「環境設定 Wrapper」 (例如 run_with_cpu_shield.sh) 呼叫。
+# 目的:
+# 專門比較「Mutex+Cond」與「Semaphore」兩種 IPC 機制在綁核環境下的效能差異。
+#
+# 測試對象 (位於 src/04_performance_comparison/ipc_mutex_sem/):
+# 1. Mutex+Cond: ipc_producer.c, ipc_consumer.c
+# 2. Semaphore:  ipc_sem_producer.c, ipc_sem_consumer.c
 #
 # 用法:
-# ./scripts/performance_test_internal_example.sh [affinity_mode] [core_a] [core_b]
+# ./scripts/performance_test_ipc_mutex_vs_sem.sh [affinity_mode] [core_a] [core_b]
 #
 # 範例 (由 Wrapper 呼叫):
-# (sudo ./scripts/run_with_cpu_shield.sh "6,7" ./scripts/performance_test_internal_example.sh rt-cross-core 6 7)
-#
-# 範例 (獨立執行，不受控):
-# ./scripts/performance_test_internal_example.sh unlimited
+# (sudo ./scripts/run_with_cpu_shield.sh "6,7" ./scripts/performance_test_ipc_mutex_vs_sem.sh rt-cross-core 6 7)
 # =====================================================================
 
 
-# --- 1. 路徑設定 (強化版) ---
+# --- 1. 路徑設定 ---
 
 # 取得此腳本所在的目錄
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 # 專案根目錄 (假設此腳本在 'scripts' 資料夾中)
 PROJECT_ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+# 原始碼目錄 (根據您的需求修改)
+SRC_DIR="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_mutex_sem"
 
 
 # --- 2. 組態設定 ---
 
-# Number of runs for each test case. average the results for accuracy.
+# 每個測試案例的執行次數 (取平均)
 NUM_RUNS=5
 
-# The time in seconds to pause between each run to allow the system to cool down.
+# 每次執行間的冷卻時間 (秒)
 REST_INTERVAL_S=0.2
 
-# Test cases.
-PRODUCT_COUNTS=(100000000)
-BUFFER_SIZES=(1 2) # Added buffer size test cases {1..100}
-MESSAGE_LENS=(64)      # Added message length test cases
+# 測試參數 (可依需求調整)
+PRODUCT_COUNTS=(100000)
+BUFFER_SIZES=({1..5}) # 測試 Buffer Size 1 到 10{1..10}
+MESSAGE_LENS=(64)     # 訊息長度
 
-# Source code files.
-THREAD_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/itc_producer_consumer.c"
-PROCESS_PRODUCER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_producer.c"
-PROCESS_CONSUMER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_consumer.c"
+# --- 原始碼檔案定義 ---
+# 1. Mutex + Cond 模型
+MUTEX_PRODUCER_SRC="${SRC_DIR}/ipc_producer.c"
+MUTEX_CONSUMER_SRC="${SRC_DIR}/ipc_consumer.c"
 
-# Names for our compiled executables (放置於 scripts 目錄下)
-THREAD_EXE="${SCRIPT_DIR}/temp_thread_test"
-PROCESS_PRODUCER_EXE="${SCRIPT_DIR}/temp_process_producer"
-PROCESS_CONSUMER_EXE="${SCRIPT_DIR}/temp_process_consumer"
+# 2. Semaphore 模型
+SEM_PRODUCER_SRC="${SRC_DIR}/ipc_sem_producer.c"
+SEM_CONSUMER_SRC="${SRC_DIR}/ipc_sem_consumer.c"
+
+# --- 編譯輸出檔名 (暫存於 scripts 目錄) ---
+MUTEX_PRODUCER_EXE="${SCRIPT_DIR}/temp_mutex_producer"
+MUTEX_CONSUMER_EXE="${SCRIPT_DIR}/temp_mutex_consumer"
+SEM_PRODUCER_EXE="${SCRIPT_DIR}/temp_sem_producer"
+SEM_CONSUMER_EXE="${SCRIPT_DIR}/temp_sem_consumer"
 
 
 # --- 3. CPU Affinity 參數解析 ---
-AFFINITY_MODE="$1" # 從第一個參數讀取模式
+AFFINITY_MODE="$1"
 CORE_A="$2"
 CORE_B="$3"
 
-# 輸出檔案 (放置於 scripts 目錄下)
-OUTPUT_FILE="${SCRIPT_DIR}/results_internal_${AFFINITY_MODE}.csv" 
+# 輸出檔案
+OUTPUT_FILE="${SCRIPT_DIR}/results_ipc_mutex_vs_sem_${AFFINITY_MODE}.csv" 
 
 # --- 模式驗證 ---
 VALID_MODES=" unlimited single-core cross-core rt-single-core rt-cross-core "
@@ -66,7 +74,6 @@ if ! echo "${VALID_MODES}" | grep -q " ${AFFINITY_MODE} "; then
     exit 1
 fi
 
-# 檢查 RT 模式是否提供了足夠的參數
 if [[ "$AFFINITY_MODE" == "rt-cross-core" && ( -z "$CORE_A" || -z "$CORE_B" ) ]]; then
     echo "錯誤: rt-cross-core 模式需要提供兩個核心 ID。"
     exit 1
@@ -80,11 +87,14 @@ fi
 
 echo "===================================================="
 echo ">> 正在以模式運行: ${AFFINITY_MODE}"
+echo ">> 比較對象: IPC (Mutex+Cond) vs IPC (Semaphore)"
 echo "===================================================="
 
 
-# --- 4. 根據模式設定 Taskset 命令前綴與編譯旗標 ---
-THREAD_CMD_PREFIX=""
+# --- 4. 根據模式設定 Taskset 命令與編譯參數 ---
+# 注意: 這裡設定的 AFFINITY_COMPILE_FLAGS 對於您新改的 C 程式碼至關重要，
+# 因為程式碼內使用 #ifdef PRODUCER_CORE_ID 來決定是否呼叫 pin_thread_to_core。
+
 PRODUCER_CMD_PREFIX=""
 CONSUMER_CMD_PREFIX=""
 AFFINITY_COMPILE_FLAGS="" 
@@ -92,15 +102,13 @@ AFFINITY_COMPILE_FLAGS=""
 case "$AFFINITY_MODE" in
     "single-core")
         echo ">> 綁定模式: (舊版) 所有工作將綁定到 CPU Core ${CORE_A}"
-        THREAD_CMD_PREFIX="taskset -c ${CORE_A}"
         PRODUCER_CMD_PREFIX="taskset -c ${CORE_A}"
         CONSUMER_CMD_PREFIX="taskset -c ${CORE_A}"
-        # [修改] 傳遞核心 ID 給 C 編譯器
+        # 傳遞核心 ID 給 C 編譯器
         AFFINITY_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_A}"
         ;;
     "cross-core")
         echo ">> 綁定模式: (舊版) 跨核心 (Producer: ${CORE_A}, Consumer: ${CORE_B})"
-        THREAD_CMD_PREFIX="taskset -c ${CORE_A},${CORE_B}" 
         PRODUCER_CMD_PREFIX="taskset -c ${CORE_A}"
         CONSUMER_CMD_PREFIX="taskset -c ${CORE_B}"
         AFFINITY_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_B}"
@@ -113,7 +121,6 @@ case "$AFFINITY_MODE" in
     "rt-single-core")
         echo ">> 綁定模式: Real-Time 單一核心 (CPU Core ${CORE_A})"
         echo ">> 優先權: SCHED_FIFO (real-time)"
-        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         AFFINITY_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_A}"
@@ -122,7 +129,6 @@ case "$AFFINITY_MODE" in
     "rt-cross-core")
         echo ">> 綁定模式: Real-Time 跨核心 (Producer: ${CORE_A}, Consumer: ${CORE_B})"
         echo ">> 優先權: SCHED_FIFO (real-time)"
-        THREAD_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A},${CORE_B}" 
         PRODUCER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_A}"
         CONSUMER_CMD_PREFIX="chrt -f 99 taskset -c ${CORE_B}"
         AFFINITY_COMPILE_FLAGS="-DPRODUCER_CORE_ID=${CORE_A} -DCONSUMER_CORE_ID=${CORE_B}"
@@ -131,13 +137,12 @@ esac
 echo "----------------------------------------------------"
 
 
-echo "Performance Test Script"
+echo "IPC Mutex vs Sem Performance Test"
 echo "Each test case will run ${NUM_RUNS} times."
-echo "Rest interval between runs is ${REST_INTERVAL_S} seconds."
 echo "Results will be saved to: ${OUTPUT_FILE}"
 
-# Set up the CSV file and write the header.
-echo "TestType,ProductCount,BufferSize,MessageLen,AvgInitTime,AvgCommTime" > ${OUTPUT_FILE}
+# 設定 CSV 檔頭
+echo "SyncMechanism,ProductCount,BufferSize,MessageLen,AvgInitTime,AvgCommTime" > ${OUTPUT_FILE}
 
 
 # --- 5. Main test loop ---
@@ -149,55 +154,19 @@ for size in "${BUFFER_SIZES[@]}"; do
             
             if [[ -n "$AFFINITY_COMPILE_FLAGS" ]]; then
                 echo "         [i] 資訊: 已啟用 C 語言層級 CPU 綁定 ($AFFINITY_COMPILE_FLAGS)"
-            else
-                echo "         [i] 資訊: 不使用 C 語言層級 CPU 綁定。"
             fi
 
-            # --- Test 1: Thread Model (ITC) ---
-            echo "         [1/2] Compiling and running the Thread model..."
-            
-            # [修改] Compile with AFFINITY_COMPILE_FLAGS
-            gcc ${THREAD_SRC} -o ${THREAD_EXE} ${AFFINITY_COMPILE_FLAGS} -DNUM_PRODUCTS=${count} -DBUFFER_SIZE=${size} -DMAX_MESSAGE_LEN=${msg_len} -lpthread -lrt
-            
-            if [ $? -ne 0 ]; then
-                echo "         !! Thread model compilation failed"
-                continue 
-            fi
+            # =================================================
+            # Test 1: IPC Mutex + Cond Model
+            # =================================================
+            echo "         [1/2] Compiling and running IPC Mutex+Cond model..."
 
-            total_init_time=0.0
-            total_comm_time=0.0
-            
-            for j in $(seq 1 ${NUM_RUNS}); do
-                echo -ne "               - Running iteration ${j}/${NUM_RUNS}...\r"
-                sleep ${REST_INTERVAL_S}
-                
-                # *** 執行綁定 ***
-                result=$( ${THREAD_CMD_PREFIX} ${THREAD_EXE} )
-                
-                init_time=$(echo "$result" | awk -F',' '{print $1}')
-                comm_time=$(echo "$result" | awk -F',' '{print $2}')
-                
-                total_init_time=$(awk -v t1="$total_init_time" -v t2="$init_time" 'BEGIN{print t1+t2}')
-                total_comm_time=$(awk -v t1="$total_comm_time" -v t2="$comm_time" 'BEGIN{print t1+t2}')
-            done
-            echo "" 
-
-            avg_init_time=$(awk -v total="$total_init_time" -v n="$NUM_RUNS" 'BEGIN{print total/n}')
-            avg_comm_time=$(awk -v total="$total_comm_time" -v n="$NUM_RUNS" 'BEGIN{print total/n}')
-            
-            echo "Thread,${count},${size},${msg_len},${avg_init_time},${avg_comm_time}" >> ${OUTPUT_FILE}
-            echo "         ... Thread model test complete."
-
-
-            # --- Test 2: Process Model (IPC) ---
-            echo "         [2/2] Compiling and running the Process model..."
-
-            # Compile with AFFINITY_COMPILE_FLAGS (之前沒有加這個)
-            gcc ${PROCESS_PRODUCER_SRC} -o ${PROCESS_PRODUCER_EXE} ${AFFINITY_COMPILE_FLAGS} -DNUM_PRODUCTS=${count} -DBUFFER_SIZE=${size} -DMAX_MESSAGE_LEN=${msg_len} -lpthread -lrt
-            gcc ${PROCESS_CONSUMER_SRC} -o ${PROCESS_CONSUMER_EXE} ${AFFINITY_COMPILE_FLAGS} -DNUM_PRODUCTS=${count} -DBUFFER_SIZE=${size} -DMAX_MESSAGE_LEN=${msg_len} -lpthread -lrt
+            # 編譯 (注意: 加入了 AFFINITY_COMPILE_FLAGS)
+            gcc ${MUTEX_PRODUCER_SRC} -o ${MUTEX_PRODUCER_EXE} ${AFFINITY_COMPILE_FLAGS} -DNUM_PRODUCTS=${count} -DBUFFER_SIZE=${size} -DMAX_MESSAGE_LEN=${msg_len} -lpthread -lrt
+            gcc ${MUTEX_CONSUMER_SRC} -o ${MUTEX_CONSUMER_EXE} ${AFFINITY_COMPILE_FLAGS} -DNUM_PRODUCTS=${count} -DBUFFER_SIZE=${size} -DMAX_MESSAGE_LEN=${msg_len} -lpthread -lrt
             
             if [ $? -ne 0 ]; then
-                echo "         !! Process model compilation failed"
+                echo "         !! IPC Mutex compilation failed"
                 continue
             fi
 
@@ -208,11 +177,11 @@ for size in "${BUFFER_SIZES[@]}"; do
                 echo -ne "               - Running iteration ${j}/${NUM_RUNS}...\r"
                 sleep ${REST_INTERVAL_S}
 
-                # *** 執行綁定 (外部 taskset 仍保留作為雙重保障) ***
-                ${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} &
-                result=$( ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE} )
+                # 執行 Mutex 模型
+                ${CONSUMER_CMD_PREFIX} ${MUTEX_CONSUMER_EXE} &
+                result=$( ${PRODUCER_CMD_PREFIX} ${MUTEX_PRODUCER_EXE} )
                 
-                wait # Ensure the background consumer has finished before the next iteration
+                wait # 等待 Consumer 結束
                 
                 init_time=$(echo "$result" | awk -F',' '{print $1}')
                 comm_time=$(echo "$result" | awk -F',' '{print $2}')
@@ -224,8 +193,51 @@ for size in "${BUFFER_SIZES[@]}"; do
             avg_init_time=$(awk -v total="$total_init_time" -v n="$NUM_RUNS" 'BEGIN{print total/n}')
             avg_comm_time=$(awk -v total="$total_comm_time" -v n="$NUM_RUNS" 'BEGIN{print total/n}')
             
-            echo "Process,${count},${size},${msg_len},${avg_init_time},${avg_comm_time}" >> ${OUTPUT_FILE}
-            echo "         ... Process model test complete."
+            # 寫入結果: Type 為 "IPC_Mutex"
+            echo "IPC_Mutex,${count},${size},${msg_len},${avg_init_time},${avg_comm_time}" >> ${OUTPUT_FILE}
+            echo "         ... IPC Mutex test complete."
+
+
+            # =================================================
+            # Test 2: IPC Semaphore Model
+            # =================================================
+            echo "         [2/2] Compiling and running IPC Semaphore model..."
+
+            # 編譯 (注意: 加入了 AFFINITY_COMPILE_FLAGS)
+            gcc ${SEM_PRODUCER_SRC} -o ${SEM_PRODUCER_EXE} ${AFFINITY_COMPILE_FLAGS} -DNUM_PRODUCTS=${count} -DBUFFER_SIZE=${size} -DMAX_MESSAGE_LEN=${msg_len} -lpthread -lrt
+            gcc ${SEM_CONSUMER_SRC} -o ${SEM_CONSUMER_EXE} ${AFFINITY_COMPILE_FLAGS} -DNUM_PRODUCTS=${count} -DBUFFER_SIZE=${size} -DMAX_MESSAGE_LEN=${msg_len} -lpthread -lrt
+            
+            if [ $? -ne 0 ]; then
+                echo "         !! IPC Semaphore compilation failed"
+                continue
+            fi
+
+            total_init_time=0.0
+            total_comm_time=0.0
+
+            for j in $(seq 1 ${NUM_RUNS}); do
+                echo -ne "               - Running iteration ${j}/${NUM_RUNS}...\r"
+                sleep ${REST_INTERVAL_S}
+
+                # 執行 Semaphore 模型
+                ${CONSUMER_CMD_PREFIX} ${SEM_CONSUMER_EXE} &
+                result=$( ${PRODUCER_CMD_PREFIX} ${SEM_PRODUCER_EXE} )
+                
+                wait # 等待 Consumer 結束
+                
+                init_time=$(echo "$result" | awk -F',' '{print $1}')
+                comm_time=$(echo "$result" | awk -F',' '{print $2}')
+                total_init_time=$(awk -v t1="$total_init_time" -v t2="$init_time" 'BEGIN{print t1+t2}')
+                total_comm_time=$(awk -v t1="$total_comm_time" -v t2="$comm_time" 'BEGIN{print t1+t2}')
+            done
+            echo "" 
+
+            avg_init_time=$(awk -v total="$total_init_time" -v n="$NUM_RUNS" 'BEGIN{print total/n}')
+            avg_comm_time=$(awk -v total="$total_comm_time" -v n="$NUM_RUNS" 'BEGIN{print total/n}')
+            
+            # 寫入結果: Type 為 "IPC_Sem"
+            echo "IPC_Sem,${count},${size},${msg_len},${avg_init_time},${avg_comm_time}" >> ${OUTPUT_FILE}
+            echo "         ... IPC Semaphore test complete."
 
         done
     done
@@ -235,7 +247,7 @@ done
 # --- 6. Cleanup ---
 echo "----------------------------------------------------"
 echo ">> Tests finished. Cleaning up compiled files..."
-rm -f ${THREAD_EXE} ${PROCESS_PRODUCER_EXE} ${PROCESS_CONSUMER_EXE}
+rm -f ${MUTEX_PRODUCER_EXE} ${MUTEX_CONSUMER_EXE} ${SEM_PRODUCER_EXE} ${SEM_CONSUMER_EXE}
 
 echo "-------------------------------------"
 hours=$((SECONDS / 3600))

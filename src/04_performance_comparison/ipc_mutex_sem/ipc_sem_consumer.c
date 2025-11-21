@@ -9,7 +9,7 @@
 #include <sched.h>     // [新增] 為了 cpu_set_t
 #include <semaphore.h>
 #include <errno.h>
-#include "ipc_common.h"
+#include "ipc_sem_common.h"
 
 static volatile uint64_t final_checksum;
 
@@ -20,7 +20,9 @@ void pin_thread_to_core(int core_id) {
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core_id, &cpuset);
-    pthread_t current_thread = pthread_self(); 
+
+    pthread_t current_thread = pthread_self();
+    
     if (pthread_setaffinity_np(current_thread, sizeof(cpu_set_t), &cpuset) != 0) {
         perror("pthread_setaffinity_np failed");
     } else {
@@ -31,17 +33,15 @@ void pin_thread_to_core(int core_id) {
 void consumer(shared_data *data_ptr){
 
     for(int i = 0;i<NUM_PRODUCTS;i++){
-        // protect read/write critical region
-        if(pthread_mutex_lock(&data_ptr->mutex) != 0){
-            perror("consumer mutex_lock failed.");
+        // look for a product.
+        if(sem_wait(&data_ptr->product) == -1){
+            perror("sem_wait(&data_ptr->product).");
             break;
         }
-
-        // wait for a product 
-        while (data_ptr->message_ready < 1) {
-            if (pthread_cond_wait(&data_ptr->product_cond, &data_ptr->mutex) != 0) {
-                perror("consumer pthread_cond_wait(product_cond) failed.");
-            }
+        // protect read/write critical region
+        if(sem_wait(&data_ptr->semaphore) == -1){
+            perror("sem_wait(&data_ptr->semaphore).");
+            break;
         }
 
         // Read and print data from shared memory
@@ -55,17 +55,18 @@ void consumer(shared_data *data_ptr){
 
 
         data_ptr->curr_consumer = (data_ptr->curr_consumer + 1) % BUFFER_SIZE;
-        data_ptr->message_ready -= 1;
 
-        if(pthread_cond_signal(&data_ptr->space_cond) != 0){
-            perror("consumer cond_signal failed.");
+
+        if(sem_post(&data_ptr->semaphore) == -1){
+            perror("em_post(&data_ptr->semaphore)");
             break;
         }
-        
-        if(pthread_mutex_unlock(&data_ptr->mutex) != 0){
-            perror("consumer mutex_unlock failed.");
+
+        if(sem_post(&data_ptr->space) == -1){
+            perror("sem_post(&data_ptr->space)");
             break;
         }
+    
     }    
     sem_post(&data_ptr->complete);
 }
@@ -73,7 +74,7 @@ void consumer(shared_data *data_ptr){
 
 int main()
 {   
-    // [新增] 儘早進行 CPU 綁定
+    // [新增] CPU Affinity Binding (儘早設定)
     #ifdef CONSUMER_CORE_ID
         pin_thread_to_core(CONSUMER_CORE_ID);
     #endif
@@ -112,19 +113,22 @@ int main()
     close(file_descriptor);
 
 
-    // --- Initialize mutex ---
+    // --- Initialize semaphore ---
     shared_data *data_ptr = (shared_data*)buffer;
 
     // --- For time Measurement ---
-    // [關鍵] 在通知 Producer 我準備好之前，已經完成了 CPU 綁定
+    // [關鍵] 在發送 consumer_ready 信號前，必須確保已經完成 Pinning
+    // 這樣 Producer 在收到信號後開始計時，才不會包含到 Pinning 的時間
     sem_post(&data_ptr->consumer_ready);
+    
+    // 等待 Producer 鳴槍開始
     sem_wait(&data_ptr->start_gun_sem);
 
     // --- Read from/write to the shared memory buffer ---
     consumer(data_ptr);
 
     
-    // unmap shared memory object from virtual memory.s
+    // unmap shared memory object from virtual memory.
     if(munmap(buffer, SHM_SIZE) == -1){
         perror("munmap() failed.");
         return EXIT_FAILURE;
