@@ -8,10 +8,11 @@
 #       以達成真正的低干擾測試環境。
 #
 # 用法:
+# chmod +x ./scripts/*.sh
 # sudo ./scripts/run_with_cpu_shield.sh <quiet_cores> <script_to_run> [script_args...]
 #
 # 範例 (執行 validate.sh 於核心 6, 7):
-# sudo ./scripts/run_with_cpu_shield.sh "6,7" ./validate.sh rt-cross-core 6 7
+# sudo ./scripts/run_sheilded_test.sh "6,7" ./scripts/performance_test_internal_example.sh rt-cross-core 6 7
 #
 # 範例 (執行 external_example.sh 於核心 6):
 # sudo ./scripts/run_with_cpu_shield.sh "6" ./scripts/performance_test_external_example.sh rt-single-core 6
@@ -90,6 +91,7 @@ function cleanup {
     echo ">> 正在執行清理..."
 
     echo ">> 1. 正在將所有任務移回 'root' cgroup..."
+    echo "-cpuset" > "${CGROUP_ROOT}/cgroup.subtree_control" 2>/dev/null
     if [ -d "${CGROUP_ROOT}/${SYSTEM_PARTITION}" ]; then
         # 將 system 分區中的所有 PID 移回 root
         cat "${CGROUP_ROOT}/${SYSTEM_PARTITION}/cgroup.procs" | while read pid; do
@@ -136,6 +138,7 @@ mkdir -p "${CGROUP_ROOT}/${SYSTEM_PARTITION}"
 # --- 3. 分配核心 ---
 NODE_MEMS=$(cat /sys/devices/system/node/online_nodes 2>/dev/null || echo 0)
 echo ">> 3. 分配核心與記憶體節點 (MEMs: ${NODE_MEMS})..."
+echo "+cpuset" > "${CGROUP_ROOT}/cgroup.subtree_control"
 echo "${QUIET_CORES}" > "${CGROUP_ROOT}/${SHIELD_PARTITION}/cpuset.cpus"
 echo "${NODE_MEMS}" > "${CGROUP_ROOT}/${SHIELD_PARTITION}/cpuset.mems"
 

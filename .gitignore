@@ -8,3 +8,11 @@ scripts/off_cpu_results
 performance_test_offcpu.sh
 *.zip
 *.csv
+scripts/results_detailed_rt-cross-core
+scripts/results_detailed_rt-single-core
+
+off_cpu_results_rt-cross-core
+off_cpu_results_rt-single-core
+
+temp_process_consumer
+temp_process_producer

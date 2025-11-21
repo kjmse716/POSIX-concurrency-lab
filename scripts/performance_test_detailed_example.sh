@@ -59,11 +59,11 @@
 # --- Configuration ---
 export FLAMEGRAPH_DIR="/home/kjmse716/Documents/Labs/POSIX-concurrency-lab/library/FlameGraph"
 
-NUM_RUNS=50 # 注意: 您的範例檔中這裡是 50，不是 200
+NUM_RUNS=1 
 REST_INTERVAL_S=0.1
-PRODUCT_COUNTS=(10000 100000 1000000)
-BUFFER_SIZES=({1..100})
-MESSAGE_LENS=(64 1500 4096 64000)
+PRODUCT_COUNTS=(1000000)
+BUFFER_SIZES=({1..100}) # Added buffer size test cases
+MESSAGE_LENS=(64)      # Added message length test cases
 
 PROFILING_MIN_PRODUCT_COUNT=1000
 
@@ -207,7 +207,7 @@ for bsize in "${BUFFER_SIZES[@]}"; do
             fi
 
             echo "       - 執行 perf record..."
-            perf record -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- ${THREAD_CMD_PREFIX} "$THREAD_EXE" > /dev/null 2>&1
+            perf record -m 1024 -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- ${THREAD_CMD_PREFIX} "$THREAD_EXE" > /dev/null 2>&1
 
             if [ -s "$PERF_DATA_FILE" ]; then
                 echo "       - 生成 perf report 文字報告 (標準 & 平坦)..."
@@ -270,7 +270,7 @@ for bsize in "${BUFFER_SIZES[@]}"; do
 
             echo "       - 執行 perf record..."
             # 【修改】: 同樣使用 bash -c "..." 技巧
-            perf record -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- \
+            perf record -m 1024 -F 99 --call-graph dwarf -g -o "$PERF_DATA_FILE" -- \
                 bash -c "${CONSUMER_CMD_PREFIX} ${PROCESS_CONSUMER_EXE} & ${PRODUCER_CMD_PREFIX} ${PROCESS_PRODUCER_EXE}; wait" > /dev/null 2>&1
             
             if [ -s "$PERF_DATA_FILE" ]; then
