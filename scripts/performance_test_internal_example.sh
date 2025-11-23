@@ -36,7 +36,7 @@ REST_INTERVAL_S=0.2
 
 # Test cases.
 PRODUCT_COUNTS=(100000000)
-BUFFER_SIZES=(1 2) # Added buffer size test cases {1..100}
+BUFFER_SIZES=(1 4 20) # Added buffer size test cases {1..100}
 MESSAGE_LENS=(64)      # Added message length test cases
 
 # Source code files.

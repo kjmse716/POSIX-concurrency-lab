@@ -38,8 +38,8 @@ NUM_RUNS=5
 REST_INTERVAL_S=0.2
 
 # 測試參數 (可依需求調整)
-PRODUCT_COUNTS=(100000)
-BUFFER_SIZES=({1..5}) # 測試 Buffer Size 1 到 10{1..10}
+PRODUCT_COUNTS=(100000000)
+BUFFER_SIZES=({1..100}) # 測試 Buffer Size 1 到 10{1..10}
 MESSAGE_LENS=(64)     # 訊息長度
 
 # --- 原始碼檔案定義 ---
