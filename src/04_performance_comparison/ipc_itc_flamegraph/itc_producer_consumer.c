@@ -91,7 +91,7 @@ long long task_compute_checksum(const char *buffer, size_t len) {
  * @note 這代表 "IPC 通訊開銷" (Synchronization + Memory Copy)
  */
 __attribute__((noinline))
-void task_produce_safe(shared_data *data_ptr, const char *src_buffer) {
+void task_produce_communicate(shared_data *data_ptr, const char *src_buffer) {
     // 1. Lock
     if (pthread_mutex_lock(&data_ptr->mutex) != 0) {
         perror("pthread_mutex_lock in producer");
@@ -133,7 +133,7 @@ void task_produce_safe(shared_data *data_ptr, const char *src_buffer) {
  * @note 將資料從 Shared Memory 複製到 Local Buffer，以便盡快釋放鎖
  */
 __attribute__((noinline))
-void task_consume_safe(shared_data *data_ptr, char *local_buffer) {
+void task_consume_communicate(shared_data *data_ptr, char *local_buffer) {
     // 1. Lock
     if (pthread_mutex_lock(&data_ptr->mutex) != 0) {
         perror("consumer pthread_mutex_lock failed.");
@@ -182,7 +182,7 @@ void* producer(void* arg) {
 
     for (int i = 0; i < NUM_PRODUCTS; i++) {
         // [FlameGraph] 呼叫封裝好的通訊函式
-        task_produce_safe(data_ptr, template_message);
+        task_produce_communicate(data_ptr, template_message);
     }
     return NULL;
 }
@@ -208,7 +208,7 @@ void* consumer(void* arg) {
 
     for (int i = 0; i < NUM_PRODUCTS; i++) {
         // 1. [IO/Sync] 從共享記憶體讀取資料 (持有鎖)
-        task_consume_safe(data_ptr, local_buffer);
+        task_consume_communicate(data_ptr, local_buffer);
 
         // 2. [Compute] 計算 Checksum (無鎖狀態，純 CPU 運算)
         // 這在 Flame Graph 中會顯示為獨立的一根柱子

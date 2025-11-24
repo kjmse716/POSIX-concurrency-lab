@@ -47,7 +47,7 @@ long long task_compute_checksum(const char *buffer, size_t len) {
  * @note 將 Shared Memory 的資料複製到 Local Buffer
  */
 __attribute__((noinline))
-void task_consume_safe(shared_data *data_ptr, char *local_buffer) {
+void task_consume_communicate(shared_data *data_ptr, char *local_buffer) {
     // 1. Lock
     if(pthread_mutex_lock(&data_ptr->mutex) != 0){
         perror("consumer mutex_lock failed.");
@@ -92,7 +92,7 @@ void consumer(shared_data *data_ptr){
 
     for(int i = 0; i < NUM_PRODUCTS; i++){
         // 1. [IO/Sync] 取得資料
-        task_consume_safe(data_ptr, local_buffer);
+        task_consume_communicate(data_ptr, local_buffer);
 
         // 2. [Compute] 計算 Checksum
         // 這會是 Flame Graph 中的瓶頸柱子，優化時只需移除這行即可

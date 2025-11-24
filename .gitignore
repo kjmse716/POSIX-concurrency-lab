@@ -16,3 +16,6 @@ off_cpu_results_rt-single-core
 
 temp_process_consumer
 temp_process_producer
+
+results_detailed_throughput_rt-cross-core
+results_detailed_ipc_compare_rt-cross-core

@@ -20,6 +20,8 @@
 #
 # 用法:
 # ./scripts/performance_test_detailed_ipc_mutex_vs_sem.sh [affinity_mode] [core_a] [core_b]
+#
+# sudo ./scripts/run_sheilded_test.sh "6,7" ./scripts/performance_test_detailed_ipc_mutex_vs_sem_example.sh rt-cross-core 6 7
 # ==============================================================================
 
 # --- 0. 環境與安全設定 ---
@@ -30,13 +32,12 @@ export FLAMEGRAPH_DIR="/home/kjmse716/Documents/Labs/POSIX-concurrency-lab/libra
 NUM_RUNS=1
 REST_INTERVAL_S=0.1
 # 可以根據需求調整測試規模
-PRODUCT_COUNTS=(100000)
-BUFFER_SIZES=(1 10)
-MESSAGE_LENS=(64)
-PROFILING_MIN_PRODUCT_COUNT=1000
+PRODUCT_COUNTS=(1000000)
+BUFFER_SIZES=({1..100}) # 測試 Buffer Size 1 到 10{1..10}
+MESSAGE_LENS=(64)    
 
 # 關鍵指標
-PERF_EVENTS="cpu-clock,task-clock,context-switches,cpu-migrations,page-faults,L1-dcache-loads,L1-dcache-load-misses,L1-dcache-store-misses,cache-misses,LLC-loads,LLC-load-misses,LLC-store-misses"
+PERF_EVENTS="cpu-clock,task-clock,context-switches,cpu-migrations,page-faults,L1-dcache-loads,L1-dcache-load-misses,L1-dcache-store-misses,cache-misses,LLC-loads,LLC-load-misses,LLC-store-misses,dTLB-load-misses"
 
 # 路徑設定
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"

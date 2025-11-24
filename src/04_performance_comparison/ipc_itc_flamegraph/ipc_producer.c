@@ -35,7 +35,7 @@ void pin_thread_to_core(int core_id) {
  * @brief Producer 的關鍵區操作 (IPC Write)
  */
 __attribute__((noinline))
-void task_produce_safe(shared_data *data_ptr, const char *src_buffer) {
+void task_produce_communicate(shared_data *data_ptr, const char *src_buffer) {
     // 1. Lock
     if(pthread_mutex_lock(&data_ptr->mutex) != 0){
         perror("producer mutex_lock failed.");
@@ -75,7 +75,7 @@ void task_produce_safe(shared_data *data_ptr, const char *src_buffer) {
 void producer(shared_data *data_ptr){
     for(int i = 0; i < NUM_PRODUCTS; i++){
         // 呼叫封裝後的函式，這在 Flame Graph 中會形成獨立的區塊
-        task_produce_safe(data_ptr, template_message);
+        task_produce_communicate(data_ptr, template_message);
     }    
 }
 

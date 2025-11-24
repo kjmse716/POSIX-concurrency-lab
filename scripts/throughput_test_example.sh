@@ -28,14 +28,14 @@ BUFFER_SIZES=(256)
 
 # [設定 C] 封包大小掃描範圍 (單位: Bytes)
 # 將會使用 seq 指令產生序列
-MSG_MIN=1048576     # 起始大小
-MSG_MAX=8388608    # 結束大小 (8KB)
-MSG_STEP=1048576    # 間距 (Step)
+MSG_MIN=256     # 起始大小
+MSG_MAX=65536    # 結束大小 (8KB)
+MSG_STEP=256    # 間距 (Step)
 
 # 原始碼路徑
-THREAD_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/itc_producer_consumer.c"
-PROCESS_PRODUCER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_producer.c"
-PROCESS_CONSUMER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc/ipc_consumer.c"
+THREAD_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc_flamegraph/itc_producer_consumer.c"
+PROCESS_PRODUCER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc_flamegraph/ipc_producer.c"
+PROCESS_CONSUMER_SRC="${PROJECT_ROOT_DIR}/src/04_performance_comparison/ipc_itc_flamegraph/ipc_consumer.c"
 
 # 編譯後執行檔名稱
 THREAD_EXE="${SCRIPT_DIR}/temp_thread_test"
